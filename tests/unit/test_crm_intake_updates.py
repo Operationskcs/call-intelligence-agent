@@ -117,6 +117,19 @@ def test_note_markdown_includes_full_transcript_and_audio_recording() -> None:
     assert "## Transcript\n\n[Agent]: hola\n[Lead]: quiero revisar mi accidente" in markdown
     assert "## Audio Recording\n\ngs://bucket/audio.mp3" in markdown
     assert "## Next Steps\n\nNone" in markdown
+    assert [
+        line
+        for line in markdown.splitlines()
+        if line.startswith("## ")
+    ] == [
+        "## Call Summary",
+        "## Transcript",
+        "## Disposition",
+        "## Next Steps",
+        "## Injury Details",
+        "## Objections",
+        "## Audio Recording",
+    ]
 
 
 def test_phoneburner_phone_call_to_uses_lead_phone_not_endpoint_url() -> None:

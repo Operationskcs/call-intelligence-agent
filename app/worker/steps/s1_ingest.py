@@ -1,4 +1,9 @@
-"""Step 1: poll call sources and apply idempotency checks."""
+"""Step 1: legacy polling helpers and idempotency checks.
+
+Webhook-triggered processing is now the primary ingestion path. The polling
+helpers remain available for manual reprocessing and the existing scheduler job
+until webhook production validation is complete.
+"""
 
 from __future__ import annotations
 
@@ -31,7 +36,7 @@ _RINGCENTRAL_MIN_CALL_DURATION_SECONDS = 15
 
 
 async def poll_new_calls() -> list[CallEvent]:
-    """Poll call sources for recent connected calls and return unprocessed events."""
+    """Legacy: poll call sources for recent connected calls and return unprocessed events."""
 
     phoneburner_events, ringcentral_events = await asyncio.gather(
         _poll_phoneburner(),
@@ -39,6 +44,15 @@ async def poll_new_calls() -> list[CallEvent]:
     )
 
     events = [*phoneburner_events, *ringcentral_events]
+    events = _dedupe_events_by_call_id(events)
+    unprocessed_events = await _filter_unprocessed(events)
+    return _cap_unprocessed_batch(unprocessed_events)
+
+
+async def poll_legacy_phoneburner_calls() -> list[CallEvent]:
+    """Legacy: poll only PhoneBurner calls for manual Intake reprocessing."""
+
+    events = await _poll_phoneburner()
     events = _dedupe_events_by_call_id(events)
     unprocessed_events = await _filter_unprocessed(events)
     return _cap_unprocessed_batch(unprocessed_events)

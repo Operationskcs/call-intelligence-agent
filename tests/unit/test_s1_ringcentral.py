@@ -128,8 +128,9 @@ async def test_ringcentral_polling_uses_ringcentral_lookback_minutes(
 
     class FixedDateTime(datetime):
         @classmethod
-        def now(cls, tz: object = None) -> datetime:
-            return datetime(2026, 6, 25, 12, 0, tzinfo=UTC)
+        def now(cls, tz: object = None) -> "FixedDateTime":
+            _ = tz
+            return cls(2026, 6, 25, 12, 0, tzinfo=UTC)
 
     class FakeRingCentralAdapter:
         async def list_call_log(

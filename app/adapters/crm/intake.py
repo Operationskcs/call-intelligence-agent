@@ -218,11 +218,11 @@ class IntakeCRMClient(TwentyGraphQLClient, CRMClient):
             title="Call Intelligence Note",
             markdown=(
                 f"## Call Summary\n\n{content.strip()}\n\n"
+                f"## Transcript\n\n{transcript_uri or 'No transcript text available.'}\n\n"
                 "## Disposition\n\nNone\n\n"
                 "## Next Steps\n\nNone\n\n"
                 "## Injury Details\n\nNone\n\n"
                 "## Objections\n\nNone\n\n"
-                f"## Transcript\n\n{transcript_uri or 'No transcript text available.'}\n\n"
                 "## Audio Recording\n\nNo recording link available."
             ),
         )
@@ -385,11 +385,11 @@ def _format_note_markdown(
     )
     return (
         f"## Call Summary\n\n{_markdown_value(note.summary)}\n\n"
+        f"## Transcript\n\n{_markdown_value(transcription)}\n\n"
         f"## Disposition\n\n{_markdown_value(note.disposition)}\n\n"
         f"## Next Steps\n\n{_markdown_value(note.next_steps)}\n\n"
         f"## Injury Details\n\n{_markdown_value(injury_details)}\n\n"
         f"## Objections\n\n{_markdown_value(note.objections)}\n\n"
-        f"## Transcript\n\n{_markdown_value(transcription)}\n\n"
         f"## Audio Recording\n\n{_markdown_value(gcs_audio_uri, fallback='No recording link available.')}"
     )
 

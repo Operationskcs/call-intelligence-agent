@@ -64,3 +64,59 @@ async def test_transcribe_propagates_other_deepgram_api_errors(
 
     with pytest.raises(ApiError):
         await DeepgramAdapter(api_key="api-key").transcribe("gs://bucket/audio.mp3")
+
+
+def test_format_deepgram_transcript_prefixes_utterances_with_start_timestamps() -> None:
+    """Utterance-level diarization should include readable start timestamps."""
+
+    transcript = deepgram._format_deepgram_transcript(
+        {
+            "results": {
+                "utterances": [
+                    {"speaker": 0, "start": 5.8, "transcript": "hello"},
+                    {"speaker": 1, "start": 72, "transcript": "hi there"},
+                ]
+            }
+        }
+    )
+
+    assert transcript == "00:05 [Agent]: hello\n01:12 [Lead]: hi there"
+
+
+def test_format_deepgram_transcript_uses_first_utterance_speaker_as_agent() -> None:
+    """Outbound calls should label the first detected utterance speaker as the agent."""
+
+    transcript = deepgram._format_deepgram_transcript(
+        {
+            "results": {
+                "utterances": [
+                    {"speaker": 1, "start": 0, "transcript": "hello from intake"},
+                    {"speaker": 0, "start": 3, "transcript": "hello"},
+                    {"speaker": 2, "start": 5, "transcript": "joining now"},
+                ]
+            }
+        }
+    )
+
+    assert transcript == (
+        "00:00 [Agent]: hello from intake\n"
+        "00:03 [Lead]: hello\n"
+        "00:05 [Lead]: joining now"
+    )
+
+
+def test_format_deepgram_transcript_labels_single_speaker_calls_as_agent() -> None:
+    """Single-speaker outbound calls should not be labeled as lead-only calls."""
+
+    transcript = deepgram._format_deepgram_transcript(
+        {
+            "results": {
+                "utterances": [
+                    {"speaker": 1, "start": 0, "transcript": "hello"},
+                    {"speaker": 1, "start": 4, "transcript": "following up"},
+                ]
+            }
+        }
+    )
+
+    assert transcript == "00:00 [Agent]: hello\n00:04 [Agent]: following up"

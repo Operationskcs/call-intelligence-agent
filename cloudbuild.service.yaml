@@ -1,0 +1,65 @@
+substitutions:
+  _REGION: us-central1
+  _REPOSITORY: call-intelligence-agent
+  _SERVICE_NAME: call-intelligence-webhook
+  _SERVICE_IMAGE: webhook-service
+  _BQ_PROJECT: keep-calm-database
+  _VERTEX_REGION: us-east5
+  _STT_PROVIDER: deepgram
+  _MIN_CALL_DURATION_SECONDS: "30"
+  _MATCH_CONFIDENCE_THRESHOLD: "0.8"
+  _PHONEBURNER_LOOKBACK_HOURS: "24"
+  _RINGCENTRAL_LOOKBACK_MINUTES: "5"
+  _GCS_AUDIO_BUCKET: pb-dispositions-call-recordings
+  _GCS_RINGCENTRAL_BUCKET: medhub-call-recordings
+  _INTAKE_CRM_BASE_URL: https://crm-server-prod-878822316507.us-central1.run.app
+  _MEDHUB_CRM_BASE_URL: https://crm-server-prod-878822316507.us-central1.run.app
+  _GRS_CRM_BASE_URL: ""
+  _SLACK_REVIEW_QUEUE_WEBHOOK_URL: ""
+  _RINGCENTRAL_WEBHOOK_URL: https://call-intelligence-webhook-znesczxkka-uc.a.run.app/webhook/ringcentral
+  _SERVICE_ACCOUNT: call-intelligence-webhook@keep-calm-database.iam.gserviceaccount.com
+  _CLOUDSQL_INSTANCE: keep-calm-database:us-central1:crm-dev
+
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -f
+      - Dockerfile.service
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_SERVICE_IMAGE}:$BUILD_ID
+      - .
+
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_SERVICE_IMAGE}:$BUILD_ID
+
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - ${_SERVICE_NAME}
+      - --image
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_SERVICE_IMAGE}:$BUILD_ID
+      - --region
+      - ${_REGION}
+      - --platform
+      - managed
+      - --service-account
+      - ${_SERVICE_ACCOUNT}
+      - --add-cloudsql-instances
+      - ${_CLOUDSQL_INSTANCE}
+      - --allow-unauthenticated
+      - --min-instances
+      - "1"
+      - --max-instances
+      - "10"
+      - --set-env-vars
+      - GCP_PROJECT_ID=$PROJECT_ID,GCP_REGION=${_REGION},VERTEX_REGION=${_VERTEX_REGION},BQ_PROJECT=${_BQ_PROJECT},STT_PROVIDER=${_STT_PROVIDER},MIN_CALL_DURATION_SECONDS=${_MIN_CALL_DURATION_SECONDS},MATCH_CONFIDENCE_THRESHOLD=${_MATCH_CONFIDENCE_THRESHOLD},PHONEBURNER_LOOKBACK_HOURS=${_PHONEBURNER_LOOKBACK_HOURS},RINGCENTRAL_LOOKBACK_MINUTES=${_RINGCENTRAL_LOOKBACK_MINUTES},GCS_AUDIO_BUCKET=${_GCS_AUDIO_BUCKET},GCS_RINGCENTRAL_BUCKET=${_GCS_RINGCENTRAL_BUCKET},INTAKE_CRM_BASE_URL=${_INTAKE_CRM_BASE_URL},MEDHUB_CRM_BASE_URL=${_MEDHUB_CRM_BASE_URL},GRS_CRM_BASE_URL=${_GRS_CRM_BASE_URL},SLACK_REVIEW_QUEUE_WEBHOOK_URL=${_SLACK_REVIEW_QUEUE_WEBHOOK_URL},RINGCENTRAL_WEBHOOK_URL=${_RINGCENTRAL_WEBHOOK_URL}
+      - --set-secrets
+      - WEBHOOK_SECRET_TOKEN=WEBHOOK_SECRET_TOKEN:latest,DATABASE_URL=CALL_INTELLIGENCE_DATABASE_URL:latest,DEEPGRAM_API_KEY=DEEPGRAM_API_KEY:latest,INTAKE_CRM_API_TOKEN=INTAKE_CRM_API_TOKEN:latest,MEDHUB_CRM_API_TOKEN=MEDHUB_CRM_API_TOKEN:latest,RINGCENTRAL_CLIENT_ID=RINGCENTRAL_CLIENT_ID:latest,RINGCENTRAL_CLIENT_SECRET=RINGCENTRAL_CLIENT_SECRET:latest,RINGCENTRAL_JWT=RINGCENTRAL_JWT:latest
+
+images:
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_SERVICE_IMAGE}:$BUILD_ID

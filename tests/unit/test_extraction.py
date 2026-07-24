@@ -29,6 +29,7 @@ def test_non_json_response_returns_default_note() -> None:
     assert note.objections is None
     assert note.pii_detected is False
     assert note.confidence == 0.0
+    assert isinstance(note, IntakeCallNote)
     assert note.injury_details is None
     assert note.case_type is None
 
@@ -58,4 +59,5 @@ def test_json_code_fence_response_still_parses() -> None:
     assert note.summary == "Lead discussed a possible accident claim."
     assert note.disposition == "Interested"
     assert note.confidence == 0.8
+    assert isinstance(note, IntakeCallNote)
     assert note.injury_details == "Back pain mentioned."

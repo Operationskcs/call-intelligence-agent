@@ -11,6 +11,21 @@ from app.worker.steps import s6_route, s7_write, s8_audit
 
 logger = logging.getLogger(__name__)
 
+__all__ = [
+    "MANUAL_REVIEW_ERROR_MESSAGE",
+    "ManualReviewRequiredError",
+    "get_crm_clients",
+    "run",
+    "s1_ingest",
+    "s2_fetch",
+    "s3_transcribe",
+    "s4_extract",
+    "s5_match",
+    "s6_route",
+    "s7_write",
+    "s8_audit",
+]
+
 MANUAL_REVIEW_ERROR_MESSAGE = "Lead match requires manual review; CRM write skipped."
 
 

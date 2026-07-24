@@ -67,6 +67,7 @@ class RingCentralSettings(EnvSettings):
     client_secret: str = Field(default="", validation_alias="RINGCENTRAL_CLIENT_SECRET")
     jwt: str = Field(default="", validation_alias="RINGCENTRAL_JWT")
     account_id: str = Field(default="", validation_alias="RINGCENTRAL_ACCOUNT_ID")
+    webhook_url: str = Field(default="", validation_alias="RINGCENTRAL_WEBHOOK_URL")
     webhook_verification_token: str = Field(
         default="",
         validation_alias="RINGCENTRAL_WEBHOOK_VERIFICATION_TOKEN",
@@ -177,6 +178,12 @@ class PipelineSettings(EnvSettings):
     )
 
 
+class WebhookSettings(EnvSettings):
+    """Shared webhook receiver settings."""
+
+    secret_token: str = Field(default="", validation_alias="WEBHOOK_SECRET_TOKEN")
+
+
 class Settings(EnvSettings):
     """Root settings object composed of nested settings groups."""
 
@@ -187,6 +194,7 @@ class Settings(EnvSettings):
     crm: CRMSettings = Field(default_factory=CRMSettings.from_env)
     database: DatabaseSettings = Field(default_factory=DatabaseSettings)
     pipeline: PipelineSettings = Field(default_factory=PipelineSettings)
+    webhook: WebhookSettings = Field(default_factory=WebhookSettings)
 
     def safe_summary(self) -> dict[str, object]:
         """Return non-secret settings useful for startup logs."""
@@ -203,6 +211,10 @@ class Settings(EnvSettings):
             "pubsub_subscription": self.gcp.pubsub_subscription_worker,
             "audio_bucket": self.gcs.audio_bucket,
             "ringcentral_bucket_configured": bool(self.gcs.ringcentral_bucket),
+            "webhook_secret_configured": bool(self.webhook.secret_token),
+            "ringcentral_webhook_url_configured": bool(
+                self.telephony.ringcentral.webhook_url
+            ),
             "stt_provider": self.stt.provider,
             "database_configured": bool(self.database.url),
             "review_queue_configured": bool(self.pipeline.slack_review_queue_webhook_url),

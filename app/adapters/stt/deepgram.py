@@ -111,6 +111,7 @@ def _format_utterances(response_json: dict[str, Any]) -> list[str]:
     if not isinstance(utterances, list):
         return []
 
+    agent_speaker = _first_utterance_speaker(utterances)
     lines: list[str] = []
     for utterance in utterances:
         if not isinstance(utterance, dict):
@@ -118,7 +119,12 @@ def _format_utterances(response_json: dict[str, Any]) -> list[str]:
         transcript = utterance.get("transcript")
         if not isinstance(transcript, str) or not transcript.strip():
             continue
-        lines.append(f"[{_speaker_label(utterance.get('speaker'))}]: {transcript.strip()}")
+        speaker_turn = (
+            f"[{_utterance_speaker_label(utterance.get('speaker'), agent_speaker)}]: "
+            f"{transcript.strip()}"
+        )
+        timestamp = _format_timestamp(utterance.get("start"))
+        lines.append(f"{timestamp} {speaker_turn}" if timestamp else speaker_turn)
     return lines
 
 
@@ -211,3 +217,41 @@ def _speaker_label(speaker: Any) -> str:
     if speaker is None:
         return "Unknown"
     return f"Speaker {speaker}"
+
+
+def _first_utterance_speaker(utterances: list[Any]) -> object | None:
+    """Return the first speaker with transcript text from Deepgram utterances."""
+
+    for utterance in utterances:
+        if not isinstance(utterance, dict):
+            continue
+        transcript = utterance.get("transcript")
+        if not isinstance(transcript, str) or not transcript.strip():
+            continue
+        speaker: object | None = utterance.get("speaker")
+        if speaker is not None:
+            return speaker
+    return None
+
+
+def _utterance_speaker_label(speaker: Any, agent_speaker: object | None) -> str:
+    """Label the first utterance speaker as Agent and every other speaker as Lead."""
+
+    if agent_speaker is None:
+        return _speaker_label(speaker)
+    if speaker is None:
+        return "Unknown"
+    return "Agent" if speaker == agent_speaker else "Lead"
+
+
+def _format_timestamp(raw_seconds: Any) -> str | None:
+    """Format Deepgram utterance start seconds as MM:SS."""
+
+    if not isinstance(raw_seconds, int | float):
+        return None
+    if raw_seconds < 0:
+        return None
+
+    total_seconds = int(raw_seconds)
+    minutes, seconds = divmod(total_seconds, 60)
+    return f"{minutes:02d}:{seconds:02d}"
