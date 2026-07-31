@@ -14,34 +14,58 @@ async def match(event: CallEvent, crm_clients: dict[str, CRMClient]) -> MatchRes
 
     client = crm_clients.get(event.workspace)
     if client is None:
-        return _unmatched(event.workspace)
+        return _unmatched(event.workspace, agent_name=event.agent_name)
 
     for phone in (event.phone_from, event.phone_to):
         if not phone:
             continue
         record = await client.find_record_by_phone(phone)
         if record:
-            return _matched(record, event.workspace, confidence=1.0, method=MatchMethod.PHONE)
+            return _matched(
+                record,
+                event.workspace,
+                confidence=1.0,
+                method=MatchMethod.PHONE,
+                agent_name=event.agent_name,
+            )
 
     name = _name_from_payload(event.raw_payload)
     if name:
         candidates = await client.find_record_by_name(name)
         if candidates:
-            return _matched(candidates[0], event.workspace, confidence=0.7, method=MatchMethod.NAME)
+            return _matched(
+                candidates[0],
+                event.workspace,
+                confidence=0.7,
+                method=MatchMethod.NAME,
+                agent_name=event.agent_name,
+            )
 
     email = _email_from_payload(event.raw_payload)
     if email:
         record = await client.find_record_by_email(email)
         if record:
-            return _matched(record, event.workspace, confidence=0.9, method=MatchMethod.EMAIL)
+            return _matched(
+                record,
+                event.workspace,
+                confidence=0.9,
+                method=MatchMethod.EMAIL,
+                agent_name=event.agent_name,
+            )
 
     birth_date = _birth_date_from_payload(event.raw_payload)
     if birth_date:
         candidates = await client.find_records_by_birth_date(birth_date)
         if candidates:
-            return _matched(candidates[0], event.workspace, confidence=0.7, method=MatchMethod.DOB)
+            return _matched(
+                candidates[0],
+                event.workspace,
+                confidence=0.7,
+                method=MatchMethod.DOB,
+                agent_name=event.agent_name,
+            )
 
-    return _unmatched(event.workspace)
+    return _unmatched(event.workspace, agent_name=event.agent_name)
 
 
 def _matched(
@@ -49,6 +73,7 @@ def _matched(
     workspace: str,
     confidence: float,
     method: MatchMethod,
+    agent_name: str | None,
 ) -> MatchResult:
     """Build a MatchResult from a CRM record dictionary."""
 
@@ -59,10 +84,11 @@ def _matched(
         confidence=confidence,
         method=method,
         requires_review=confidence < get_settings().pipeline.match_confidence_threshold,
+        agent_name=agent_name,
     )
 
 
-def _unmatched(workspace: str | None) -> MatchResult:
+def _unmatched(workspace: str | None, *, agent_name: str | None = None) -> MatchResult:
     """Build an unmatched review-required result."""
 
     return MatchResult(
@@ -71,6 +97,7 @@ def _unmatched(workspace: str | None) -> MatchResult:
         confidence=0.4,
         method=MatchMethod.UNMATCHED,
         requires_review=True,
+        agent_name=agent_name,
     )
 
 

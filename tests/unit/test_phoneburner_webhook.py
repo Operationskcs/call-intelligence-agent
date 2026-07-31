@@ -23,6 +23,7 @@ def _payload(**overrides: object) -> dict[str, object]:
         "duration": 90,
         "connected": True,
         "end_time": "2026-07-23T14:30:00Z",
+        "from": {"name": "PhoneBurner Agent"},
     }
     payload.update(overrides)
     return payload
@@ -65,6 +66,7 @@ def test_parse_phoneburner_payload_extracts_required_fields() -> None:
     assert parsed_payload.duration == 91
     assert parsed_payload.connected is True
     assert parsed_payload.end_time == "2026-07-23T14:30:00Z"
+    assert parsed_payload.agent_name == "PhoneBurner Agent"
 
 
 def test_build_call_event_uses_intake_phoneburner_fields() -> None:
@@ -83,7 +85,8 @@ def test_build_call_event_uses_intake_phoneburner_fields() -> None:
         phone_from="+15550000001",
         phone_to="+15550000002",
         duration_sec=90,
-        agent_id=None,
+        agent_id="PhoneBurner Agent",
+        agent_name="PhoneBurner Agent",
         gcs_audio_uri="gs://pb-dispositions-call-recordings/pb-call-123.mp3",
         raw_payload=raw_payload,
     )
@@ -177,6 +180,7 @@ async def test_receive_phoneburner_webhook_runs_pipeline_for_accepted_call(
     assert event.phone_from == "+15550000001"
     assert event.phone_to == "+15550000002"
     assert event.duration_sec == 90
+    assert event.agent_name == "PhoneBurner Agent"
     assert event.gcs_audio_uri == "gs://pb-dispositions-call-recordings/pb-call-123.mp3"
     assert event.raw_payload["end_time"] == "2026-07-23T14:30:00Z"
 

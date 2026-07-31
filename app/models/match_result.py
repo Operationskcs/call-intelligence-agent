@@ -26,3 +26,4 @@ class MatchResult(BaseModel):
     method: MatchMethod
     requires_review: bool
     matched_on_phone: Literal["primary", "fallback", "none"] = "none"
+    agent_name: str | None = None

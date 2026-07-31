@@ -1,9 +1,14 @@
+substitutions:
+  _CALL_QUALITY_TRIGGER_URL: https://call-quality-trigger-znesczxkka-uc.a.run.app/integrations/call-intelligence/trigger
+
 steps:
   - name: gcr.io/cloud-builders/docker
     args:
       - build
       - -f
       - Dockerfile.worker
+      - --build-arg
+      - CALL_QUALITY_TRIGGER_URL=${_CALL_QUALITY_TRIGGER_URL}
       - -t
       - us-central1-docker.pkg.dev/keep-calm-database/call-intelligence-agent/call-intelligence-worker:latest
       - .

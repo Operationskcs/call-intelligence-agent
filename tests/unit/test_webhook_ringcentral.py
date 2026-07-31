@@ -42,6 +42,7 @@ def test_parse_completed_connected_recording_payload() -> None:
     assert event.patient_phone_fallback == "+17865550100"
     assert event.duration_sec == 61
     assert event.agent_id == "MedHub Agent"
+    assert event.agent_name == "MedHub Agent"
     assert event.gcs_audio_uri is None
     assert event.raw_payload["recording_content_uri"] == "https://platform.ringcentral.test/rec-1"
     assert event.raw_payload["from_phone_number"] == "+17865550100"

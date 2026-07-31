@@ -218,10 +218,7 @@ def _phoneburner_row_to_event(row: dict[str, Any]) -> CallEvent:
     """Map a PhoneBurner BigQuery row to the normalized CallEvent model."""
 
     raw_payload = _with_matching_hints(row)
-    agent_name = _join_name(
-        _nested_str(raw_payload, "agent", "first_name"),
-        _nested_str(raw_payload, "agent", "last_name"),
-    )
+    agent_name = _phoneburner_agent_name(raw_payload)
 
     return CallEvent(
         call_id=str(_required_value(raw_payload, "call_id")),
@@ -231,6 +228,7 @@ def _phoneburner_row_to_event(row: dict[str, Any]) -> CallEvent:
         phone_to=_str_value(raw_payload.get("endpoint")),
         duration_sec=_int_value(raw_payload.get("duration")),
         agent_id=agent_name or None,
+        agent_name=agent_name or None,
         gcs_audio_uri=_str_value(raw_payload.get("recording_gcs_uri")) or None,
         raw_payload=raw_payload,
     )
@@ -257,6 +255,7 @@ def _ringcentral_record_to_event(record: dict[str, Any]) -> CallEvent:
         patient_phone_fallback=patient_phone_fallback or None,
         duration_sec=_int_value(record.get("duration")),
         agent_id=from_name or None,
+        agent_name=from_name or None,
         gcs_audio_uri=None,
         raw_payload={
             "patient_phone_primary": patient_phone_primary,
@@ -290,6 +289,20 @@ def _ringcentral_records_to_events(records: Sequence[dict[str, Any]]) -> list[Ca
         )
 
     return events
+
+
+def _phoneburner_agent_name(raw_payload: dict[str, Any]) -> str:
+    """Read the PhoneBurner agent name from the call's from party."""
+
+    return (
+        _nested_str(raw_payload, "from", "name")
+        or _str_value(raw_payload.get("from_name"))
+        or _str_value(raw_payload.get("agent_name"))
+        or _join_name(
+            _nested_str(raw_payload, "agent", "first_name"),
+            _nested_str(raw_payload, "agent", "last_name"),
+        )
+    )
 
 
 def _is_ringcentral_connected_record(

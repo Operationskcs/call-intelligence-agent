@@ -15,6 +15,7 @@ from app.worker.steps.s1_ingest import (
     _cap_unprocessed_batch,
     _filter_unprocessed,
     _is_ringcentral_connected_record,
+    _phoneburner_row_to_event,
     _ringcentral_record_to_event,
     _ringcentral_records_to_events,
 )
@@ -46,6 +47,7 @@ def test_ringcentral_record_maps_patient_to_phone_from() -> None:
     assert event.patient_phone_primary == "+13055551234"
     assert event.patient_phone_fallback == "+17865550100"
     assert event.agent_id == "MedHub Agent"
+    assert event.agent_name == "MedHub Agent"
     assert event.gcs_audio_uri is None
     assert event.raw_payload["patient_phone_primary"] == "+13055551234"
     assert event.raw_payload["patient_phone_fallback"] == "+17865550100"
@@ -53,6 +55,24 @@ def test_ringcentral_record_maps_patient_to_phone_from() -> None:
     assert event.raw_payload["recording_id"] == "rec-123"
     assert event.raw_payload["from_name"] == "MedHub Agent"
     assert event.raw_payload["to_name"] == "Patient Name"
+
+
+def test_phoneburner_row_maps_from_name_to_agent_name() -> None:
+    """PhoneBurner Intake calls should carry the from.name agent display value."""
+
+    event = _phoneburner_row_to_event(
+        {
+            "call_id": "pb-123",
+            "contact": {"phone": "+13055551234"},
+            "endpoint": "+17865550100",
+            "duration": 90,
+            "recording_gcs_uri": "gs://bucket/audio.mp3",
+            "from": {"name": "PhoneBurner Agent"},
+        }
+    )
+
+    assert event.agent_name == "PhoneBurner Agent"
+    assert event.agent_id == "PhoneBurner Agent"
 
 
 def test_ringcentral_filter_requires_connected_duration_and_recording() -> None:

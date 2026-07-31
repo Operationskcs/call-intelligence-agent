@@ -25,5 +25,6 @@ class CallEvent(BaseModel):
     patient_phone_fallback: str | None = None
     duration_sec: int = Field(ge=0)
     agent_id: str | None
+    agent_name: str | None = None
     gcs_audio_uri: str | None
     raw_payload: dict[str, Any]

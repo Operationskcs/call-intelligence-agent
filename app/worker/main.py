@@ -247,6 +247,7 @@ async def _log_terminal_deepgram_error(event: CallEvent, error_message: str) -> 
             confidence=0.0,
             method=MatchMethod.UNMATCHED,
             requires_review=False,
+            agent_name=event.agent_name,
         ),
         note=None,
         error=error_message,

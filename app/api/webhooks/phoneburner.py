@@ -61,6 +61,7 @@ def _parse_call_event(payload: dict[str, Any]) -> CallEvent:
         phone_to=str(payload.get("phone_to") or payload.get("to") or ""),
         duration_sec=_int_value(payload.get("duration_sec") or payload.get("duration") or 0),
         agent_id=_optional_str(payload.get("agent_id") or payload.get("agentId")),
+        agent_name=_phoneburner_agent_name(payload),
         gcs_audio_uri=_optional_str(payload.get("gcs_audio_uri") or payload.get("recording_gcs_uri")),
         raw_payload=payload,
     )
@@ -95,3 +96,15 @@ def _optional_str(value: Any) -> str | None:
         return None
     text = str(value)
     return text or None
+
+
+def _phoneburner_agent_name(payload: dict[str, Any]) -> str | None:
+    """Read the PhoneBurner agent name from the call's from party."""
+
+    from_party = payload.get("from")
+    if isinstance(from_party, dict):
+        name = _optional_str(from_party.get("name"))
+        if name:
+            return name
+
+    return _optional_str(payload.get("from_name") or payload.get("agent_name"))

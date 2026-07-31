@@ -155,6 +155,13 @@ class DatabaseSettings(EnvSettings):
 class PipelineSettings(EnvSettings):
     """Pipeline behavior and review queue settings."""
 
+    call_quality_trigger_url: str = Field(
+        default=(
+            "https://call-quality-trigger-znesczxkka-uc.a.run.app/"
+            "integrations/call-intelligence/trigger"
+        ),
+        validation_alias="CALL_QUALITY_TRIGGER_URL",
+    )
     min_call_duration_seconds: int = Field(
         default=30,
         validation_alias="MIN_CALL_DURATION_SECONDS",
@@ -205,6 +212,7 @@ class Settings(EnvSettings):
             "vertex_region": self.gcp.vertex_region,
             "bq_project": self.gcp.bq_project,
             "poll_interval_minutes": self.pipeline.poll_interval_minutes,
+            "call_quality_trigger_url": self.pipeline.call_quality_trigger_url,
             "phoneburner_lookback_hours": self.pipeline.phoneburner_lookback_hours,
             "ringcentral_lookback_minutes": self.pipeline.ringcentral_lookback_minutes,
             "pubsub_topic": self.gcp.pubsub_topic_call_completed,

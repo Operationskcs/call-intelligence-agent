@@ -97,6 +97,7 @@ Eligible Intake calls must be connected, at least 30 seconds long, and include a
 - `DATABASE_URL`: Cloud SQL/PostgreSQL connection for `call_audit_log`.
 - `DEEPGRAM_API_KEY`: transcription provider credential.
 - `INTAKE_CRM_BASE_URL`, `INTAKE_CRM_API_TOKEN`, `MEDHUB_CRM_BASE_URL`, `MEDHUB_CRM_API_TOKEN`, `GRS_CRM_BASE_URL`, `GRS_CRM_API_TOKEN`: CRM workspace configuration.
+- `CALL_QUALITY_TRIGGER_URL`: call-quality trigger endpoint notified after successful non-review CRM writes.
 
 ## Validation
 

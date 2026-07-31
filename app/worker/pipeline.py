@@ -6,6 +6,7 @@ from app.adapters.crm.factory import get_crm_clients
 from app.models.call_event import CallEvent
 from app.models.match_result import MatchMethod, MatchResult
 from app.models.note import ExtractedNote
+from app.services.call_quality_trigger import notify_call_quality_trigger
 from app.worker.steps import s1_ingest, s2_fetch, s3_transcribe, s4_extract, s5_match
 from app.worker.steps import s6_route, s7_write, s8_audit
 
@@ -42,6 +43,7 @@ async def run(event: CallEvent) -> None:
         confidence=0.0,
         method=MatchMethod.UNMATCHED,
         requires_review=True,
+        agent_name=event.agent_name,
     )
     note: ExtractedNote | None = None
 
@@ -61,7 +63,15 @@ async def run(event: CallEvent) -> None:
 
         s6_route.route(match_result, event)
         await s7_write.write_note(match_result, note, event, transcript)
-        await s8_audit.log_result(event, match_result, note, error=None)
+        processed_at = await s8_audit.log_result(event, match_result, note, error=None)
+        if processed_at is not None:
+            await notify_call_quality_trigger(
+                event=event,
+                match=match_result,
+                note=note,
+                transcript=transcript,
+                processed_at=processed_at,
+            )
     except ManualReviewRequiredError:
         raise
     except Exception as exc:

@@ -143,6 +143,7 @@ def parse_call_event(payload: dict[str, Any]) -> CallEvent | None:
         patient_phone_fallback=from_phone or None,
         duration_sec=duration_sec,
         agent_id=from_name or None,
+        agent_name=from_name or None,
         gcs_audio_uri=None,
         raw_payload=raw_payload,
     )

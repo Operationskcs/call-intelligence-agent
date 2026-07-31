@@ -30,6 +30,7 @@ class PhoneBurnerCallPayload:
     duration: int
     connected: bool
     end_time: str | None
+    agent_name: str | None
 
 
 @router.post("/webhook/phoneburner", status_code=status.HTTP_200_OK)
@@ -81,6 +82,7 @@ def parse_phoneburner_payload(payload: Mapping[str, Any]) -> PhoneBurnerCallPayl
         duration=_int_value(payload.get("duration")),
         connected=_bool_value(payload.get("connected")),
         end_time=_optional_str(payload.get("end_time")),
+        agent_name=_phoneburner_agent_name(payload),
     )
 
 
@@ -107,7 +109,8 @@ def build_call_event(
         phone_from=parsed_payload.phone_from,
         phone_to=parsed_payload.phone_to,
         duration_sec=parsed_payload.duration,
-        agent_id=None,
+        agent_id=parsed_payload.agent_name,
+        agent_name=parsed_payload.agent_name,
         gcs_audio_uri=parsed_payload.recording_gcs_uri,
         raw_payload=dict(raw_payload),
     )
@@ -164,3 +167,19 @@ def _optional_str(value: Any) -> str | None:
 
     text = _str_value(value)
     return text or None
+
+
+def _phoneburner_agent_name(payload: Mapping[str, Any]) -> str | None:
+    """Read the PhoneBurner agent name from the call's from party."""
+
+    from_party = payload.get("from")
+    if isinstance(from_party, Mapping):
+        name = _optional_str(from_party.get("name"))
+        if name:
+            return name
+
+    return (
+        _optional_str(payload.get("from_name"))
+        or _optional_str(payload.get("agent_name"))
+        or _optional_str(payload.get("agentName"))
+    )

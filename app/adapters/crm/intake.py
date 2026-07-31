@@ -142,7 +142,7 @@ class IntakeCRMClient(TwentyGraphQLClient, CRMClient):
             record_url=event.gcs_audio_uri,
             record_updated=True,
             call_name=_phone_call_name(event.call_id),
-            agent_name=event.agent_id,
+            agent_name=event.agent_name or event.agent_id,
         )
         note_id = await self.create_note_only(
             title=f"Call Intelligence - {event.call_id}",

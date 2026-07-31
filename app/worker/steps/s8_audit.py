@@ -13,11 +13,12 @@ async def log_result(
     match: MatchResult,
     note: ExtractedNote | None,
     error: str | None,
-) -> None:
+) -> datetime | None:
     """Upsert pipeline result details into call_audit_log."""
 
     _ = note
     is_terminal_state = error is None or error in TERMINAL_PROCESSED_ERROR_MESSAGES
+    processed_at = datetime.now(UTC) if is_terminal_state else None
     await upsert_call_log(
         {
             "call_id": event.call_id,
@@ -39,6 +40,7 @@ async def log_result(
             ),
             "review_required": match.requires_review,
             "error_message": error,
-            "processed_at": datetime.now(UTC) if is_terminal_state else None,
+            "processed_at": processed_at,
         }
     )
+    return processed_at

@@ -62,6 +62,12 @@ def _parse_call_event(payload: dict[str, Any]) -> CallEvent:
     call_id = str(payload.get("call_id") or payload.get("callId") or payload.get("id") or "")
     if not call_id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing call_id")
+    from_party = payload.get("from")
+    agent_name = (
+        _optional_str(from_party.get("name"))
+        if isinstance(from_party, dict)
+        else _optional_str(payload.get("from_name") or payload.get("agent_name"))
+    )
 
     return CallEvent(
         call_id=call_id,
@@ -71,6 +77,7 @@ def _parse_call_event(payload: dict[str, Any]) -> CallEvent:
         phone_to=str(payload.get("phone_to") or payload.get("to") or ""),
         duration_sec=_int_value(payload.get("duration_sec") or payload.get("duration") or 0),
         agent_id=_optional_str(payload.get("agent_id") or payload.get("agentId")),
+        agent_name=agent_name,
         gcs_audio_uri=_optional_str(payload.get("gcs_audio_uri") or payload.get("recording_gcs_uri")),
         raw_payload=payload,
     )

@@ -153,6 +153,7 @@ def _match_result(
         method=method,
         requires_review=confidence < threshold,
         matched_on_phone=matched_on_phone,
+        agent_name=event.agent_name,
     )
 
 
@@ -166,6 +167,7 @@ async def _review_required(event: CallEvent, reason: str) -> MatchResult:
         confidence=0.0,
         method=MatchMethod.UNMATCHED,
         requires_review=True,
+        agent_name=event.agent_name,
     )
 
 
