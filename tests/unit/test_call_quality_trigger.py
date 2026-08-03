@@ -26,11 +26,16 @@ def test_audience_from_url_uses_cloud_run_origin() -> None:
     )
 
 
-def test_payload_contains_call_quality_fields() -> None:
-    """The trigger payload should include call, CRM, transcript, and agent details."""
+def test_payload_omits_agent_name_and_truncates_phone_fields() -> None:
+    """The trigger payload should match the downstream schema."""
 
     payload = call_quality_trigger._payload(
-        event=_event(),
+        event=_event().model_copy(
+            update={
+                "phone_from": "+155500000011234567890123456789999",
+                "phone_to": "+155500000022234567890123456789999",
+            }
+        ),
         match=_match(),
         note=_note(),
         transcript="[Agent]: hello",
@@ -45,11 +50,13 @@ def test_payload_contains_call_quality_fields() -> None:
         "summary": "Lead needs help.",
         "disposition": "Interested",
         "duration_sec": 90,
-        "phone_from": "+15550000001",
-        "phone_to": "+15550000002",
-        "agent_name": "PhoneBurner Agent",
+        "phone_from": "+1555000000112345678901234567899",
+        "phone_to": "+1555000000222345678901234567899",
         "created_at": "2026-07-31T12:30:00+00:00",
     }
+    assert "agent_name" not in payload
+    assert len(str(payload["phone_from"])) == 32
+    assert len(str(payload["phone_to"])) == 32
 
 
 async def test_notify_warning_on_endpoint_failure(

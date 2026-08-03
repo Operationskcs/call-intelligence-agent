@@ -19,6 +19,7 @@ from app.models.note import ExtractedNote
 logger = logging.getLogger(__name__)
 
 _REQUEST_TIMEOUT_SECONDS = 10.0
+_MAX_PHONE_LENGTH = 32
 
 
 async def notify_call_quality_trigger(
@@ -91,11 +92,16 @@ def _payload(
         "summary": note.summary,
         "disposition": note.disposition,
         "duration_sec": event.duration_sec,
-        "phone_from": event.phone_from,
-        "phone_to": event.phone_to,
-        "agent_name": event.agent_name or match.agent_name or event.agent_id,
+        "phone_from": _truncate_phone(event.phone_from),
+        "phone_to": _truncate_phone(event.phone_to),
         "created_at": processed_at.isoformat(),
     }
+
+
+def _truncate_phone(phone: str) -> str:
+    """Limit phone fields to the downstream schema length."""
+
+    return phone[:_MAX_PHONE_LENGTH]
 
 
 def _fetch_id_token(audience: str) -> str:
