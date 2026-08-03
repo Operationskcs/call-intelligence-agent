@@ -24,6 +24,34 @@ from app.worker import pipeline
 from app.worker.steps.s1_ingest import poll_legacy_phoneburner_calls, poll_new_calls
 from app.worker.steps.s8_audit import log_result
 
+_LOG_LEVEL = logging.INFO
+_LOG_FORMAT = "%(levelname)s:%(name)s:%(message)s"
+
+
+def _configure_logging() -> None:
+    """Ensure app logs are emitted to Cloud Run stdout/stderr."""
+
+    root_logger = logging.getLogger()
+    root_logger.setLevel(_LOG_LEVEL)
+
+    emitting_handlers = [
+        handler
+        for handler in root_logger.handlers
+        if not isinstance(handler, logging.NullHandler)
+    ]
+    if emitting_handlers:
+        for handler in emitting_handlers:
+            if handler.level > _LOG_LEVEL:
+                handler.setLevel(_LOG_LEVEL)
+        return
+
+    handler = logging.StreamHandler()
+    handler.setLevel(_LOG_LEVEL)
+    handler.setFormatter(logging.Formatter(_LOG_FORMAT))
+    root_logger.addHandler(handler)
+
+
+_configure_logging()
 logger = logging.getLogger(__name__)
 
 __all__ = [
@@ -118,7 +146,7 @@ def create_app() -> FastAPI:
         """Log startup config and register the RingCentral webhook subscription."""
 
         _ = app
-        logging.basicConfig(level=logging.INFO)
+        _configure_logging()
         settings = get_settings()
         logger.info("Worker service configuration loaded: %s", settings.safe_summary())
 
@@ -273,7 +301,7 @@ def _pause_call_intelligence_worker_scheduler() -> None:
 def main() -> int:
     """Run one BigQuery polling cycle for Cloud Run Jobs or scheduled invocations."""
 
-    logging.basicConfig(level=logging.INFO)
+    _configure_logging()
     try:
         asyncio.run(process_polled_calls())
     except DeepgramCreditsExhaustedError:

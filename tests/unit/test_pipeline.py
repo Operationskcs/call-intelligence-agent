@@ -218,13 +218,110 @@ async def test_successful_crm_write_notifies_call_quality_trigger(
     ]
 
 
-def _call_event() -> CallEvent:
+async def test_successful_non_intake_crm_write_skips_call_quality_trigger(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Non-Intake calls should not notify the Intake-only call-quality trigger."""
+
+    event = _call_event(workspace="medhub")
+    note = _extracted_note()
+    transcript = "[Agent]: hello\n[Lead]: hello"
+    processed_at = datetime(2026, 7, 31, 12, 30, tzinfo=UTC)
+    calls: list[str] = []
+
+    async def fake_check_idempotency(call_id: str) -> bool:
+        calls.append(f"s1:{call_id}")
+        return False
+
+    async def fake_fetch_recording(call_event: CallEvent) -> CallEvent:
+        calls.append(f"s2:{call_event.call_id}")
+        return call_event
+
+    async def fake_transcribe(call_event: CallEvent) -> str:
+        calls.append(f"s3:{call_event.call_id}")
+        return transcript
+
+    async def fake_extract(call_transcript: str, workspace: str) -> ExtractedNote:
+        calls.append(f"s4:{workspace}")
+        assert call_transcript == transcript
+        return note
+
+    async def fake_match_lead(
+        call_event: CallEvent,
+        crm_clients: object,
+    ) -> MatchResult:
+        calls.append(f"s5:{call_event.call_id}")
+        _ = crm_clients
+        return MatchResult(
+            crm_record_id="lead-123",
+            workspace="medhub",
+            confidence=1.0,
+            method=MatchMethod.PHONE,
+            requires_review=False,
+            agent_name=call_event.agent_name,
+        )
+
+    def fake_route(match_result: MatchResult, call_event: CallEvent) -> None:
+        calls.append(f"s6:{call_event.call_id}:{match_result.crm_record_id}")
+
+    async def fake_write_note(
+        match_result: MatchResult,
+        extracted_note: ExtractedNote,
+        call_event: CallEvent,
+        call_transcript: str,
+    ) -> None:
+        calls.append(f"s7:{call_event.call_id}:{match_result.crm_record_id}")
+        assert extracted_note is note
+        assert call_transcript == transcript
+
+    async def fake_log_result(
+        call_event: CallEvent,
+        match_result: MatchResult,
+        extracted_note: ExtractedNote | None,
+        error: str | None,
+    ) -> datetime:
+        calls.append(f"s8:{call_event.call_id}")
+        assert match_result.requires_review is False
+        assert extracted_note is note
+        assert error is None
+        return processed_at
+
+    monkeypatch.setattr(pipeline.s1_ingest, "check_idempotency", fake_check_idempotency)
+    monkeypatch.setattr(pipeline.s2_fetch, "fetch_recording", fake_fetch_recording)
+    monkeypatch.setattr(pipeline.s3_transcribe, "transcribe", fake_transcribe)
+    monkeypatch.setattr(pipeline.s4_extract, "extract", fake_extract)
+    monkeypatch.setattr(pipeline.s5_match, "match_lead", fake_match_lead)
+    monkeypatch.setattr(pipeline.s6_route, "route", fake_route)
+    monkeypatch.setattr(pipeline.s7_write, "write_note", fake_write_note)
+    monkeypatch.setattr(pipeline.s8_audit, "log_result", fake_log_result)
+    monkeypatch.setattr(
+        pipeline,
+        "notify_call_quality_trigger",
+        lambda **kwargs: pytest.fail(f"Unexpected call quality trigger: {kwargs}"),
+    )
+    monkeypatch.setattr(pipeline, "get_crm_clients", lambda: {})
+
+    await pipeline.run(event)
+
+    assert calls == [
+        "s1:pb-call-123",
+        "s2:pb-call-123",
+        "s3:pb-call-123",
+        "s4:medhub",
+        "s5:pb-call-123",
+        "s6:pb-call-123:lead-123",
+        "s7:pb-call-123:lead-123",
+        "s8:pb-call-123",
+    ]
+
+
+def _call_event(workspace: str = "intake") -> CallEvent:
     """Build a representative successful Intake event."""
 
     return CallEvent(
         call_id="pb-call-123",
         source=CallSource.PHONEBURNER,
-        workspace="intake",
+        workspace=workspace,
         phone_from="+15550000001",
         phone_to="+15550000002",
         duration_sec=90,

@@ -64,7 +64,10 @@ async def run(event: CallEvent) -> None:
         s6_route.route(match_result, event)
         await s7_write.write_note(match_result, note, event, transcript)
         processed_at = await s8_audit.log_result(event, match_result, note, error=None)
-        if processed_at is not None:
+        if processed_at is not None and _should_notify_call_quality_trigger(
+            event,
+            match_result,
+        ):
             await notify_call_quality_trigger(
                 event=event,
                 match=match_result,
@@ -77,3 +80,13 @@ async def run(event: CallEvent) -> None:
     except Exception as exc:
         await s8_audit.log_result(event, match_result, note, error=str(exc))
         raise
+
+
+def _should_notify_call_quality_trigger(
+    event: CallEvent,
+    match: MatchResult,
+) -> bool:
+    """Return True when the call-quality trigger supports this workspace."""
+
+    workspace = match.workspace or event.workspace
+    return workspace == "intake"

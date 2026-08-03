@@ -1,5 +1,7 @@
 """Tests for worker polling loop behavior."""
 
+import logging
+
 import pytest
 from deepgram.errors.bad_request_error import BadRequestError
 
@@ -11,6 +13,45 @@ from app.storage.audit import (
     DEEPGRAM_NO_TRANSCRIPT_ERROR_MESSAGE,
 )
 from app.worker import main, pipeline
+
+
+def test_configure_logging_adds_info_stream_handler_to_root() -> None:
+    """App INFO logs should have a root stream handler for Cloud Run."""
+
+    root_logger = logging.getLogger()
+    original_handlers = root_logger.handlers[:]
+    original_level = root_logger.level
+
+    try:
+        for handler in original_handlers:
+            root_logger.removeHandler(handler)
+        root_logger.setLevel(logging.WARNING)
+
+        main._configure_logging()
+
+        assert root_logger.level == logging.INFO
+        assert len(root_logger.handlers) == 1
+        handler = root_logger.handlers[0]
+        assert isinstance(handler, logging.StreamHandler)
+        assert handler.level == logging.INFO
+        assert handler.formatter is not None
+
+        record = logging.LogRecord(
+            "app.services.example",
+            logging.INFO,
+            __file__,
+            1,
+            "hello",
+            (),
+            None,
+        )
+        assert handler.formatter.format(record) == "INFO:app.services.example:hello"
+    finally:
+        for handler in root_logger.handlers[:]:
+            root_logger.removeHandler(handler)
+        for handler in original_handlers:
+            root_logger.addHandler(handler)
+        root_logger.setLevel(original_level)
 
 
 def _event(call_id: str) -> CallEvent:
