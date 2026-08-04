@@ -68,6 +68,13 @@ async def run(event: CallEvent) -> None:
             event,
             match_result,
         ):
+            call_id = event.call_id
+            workspace = match_result.workspace or event.workspace
+            logger.info(
+                "Attempting call quality trigger. call_id=%s workspace=%s",
+                call_id,
+                workspace,
+            )
             await notify_call_quality_trigger(
                 event=event,
                 match=match_result,
@@ -75,6 +82,7 @@ async def run(event: CallEvent) -> None:
                 transcript=transcript,
                 processed_at=processed_at,
             )
+            logger.info("Call quality trigger completed. call_id=%s", call_id)
     except ManualReviewRequiredError:
         raise
     except Exception as exc:

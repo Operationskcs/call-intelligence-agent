@@ -18,7 +18,7 @@ from app.models.note import ExtractedNote
 
 logger = logging.getLogger(__name__)
 
-_REQUEST_TIMEOUT_SECONDS = 10.0
+_REQUEST_TIMEOUT_SECONDS = 30.0
 _MAX_PHONE_LENGTH = 32
 
 
