@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 _REQUEST_TIMEOUT_SECONDS = 30.0
 _MAX_PHONE_LENGTH = 32
+_BACKGROUND_TASKS: set[asyncio.Task[None]] = set()
 
 
 async def notify_call_quality_trigger(
@@ -30,7 +31,7 @@ async def notify_call_quality_trigger(
     transcript: str,
     processed_at: datetime,
 ) -> None:
-    """POST a successful CRM write to the call-quality trigger endpoint."""
+    """Schedule a successful CRM write notification without blocking the pipeline."""
 
     try:
         trigger_url = get_settings().pipeline.call_quality_trigger_url.strip()
@@ -41,7 +42,6 @@ async def notify_call_quality_trigger(
             return
 
         audience = _audience_from_url(trigger_url)
-        token = await asyncio.to_thread(_fetch_id_token, audience)
         payload = _payload(
             event=event,
             match=match,
@@ -50,26 +50,57 @@ async def notify_call_quality_trigger(
             processed_at=processed_at,
         )
 
+        task = asyncio.create_task(
+            _run_call_quality_trigger(
+                event.call_id,
+                trigger_url,
+                audience,
+                payload,
+            )
+        )
+        _BACKGROUND_TASKS.add(task)
+        task.add_done_callback(_BACKGROUND_TASKS.discard)
+
+        logger.info("Call quality trigger dispatched. call_id=%s", event.call_id)
+    except Exception as exc:
+        logger.warning(
+            "Call quality trigger failed. call_id=%s error=%s",
+            event.call_id,
+            _error_text(exc),
+            exc_info=True,
+        )
+
+
+async def _run_call_quality_trigger(
+    call_id: str,
+    trigger_url: str,
+    audience: str,
+    payload: dict[str, object],
+) -> None:
+    """Send the trigger notification and own all background-task logging."""
+
+    try:
+        token = await asyncio.to_thread(_fetch_id_token, audience)
         response = await _post_trigger(trigger_url, token, payload)
 
         if response.is_success:
             logger.info(
-                "Call quality trigger notified. call_id=%s lead_id=%s",
-                event.call_id,
-                match.crm_record_id,
+                "Call quality trigger succeeded. call_id=%s status_code=%s",
+                call_id,
+                response.status_code,
             )
             return
 
         logger.warning(
-            "Call quality trigger failed. call_id=%s status_code=%s response=%s",
-            event.call_id,
-            response.status_code,
-            response.text[:500],
+            "Call quality trigger failed. call_id=%s error=%s",
+            call_id,
+            f"status_code={response.status_code} response={response.text[:500]}",
         )
-    except Exception:
+    except Exception as exc:
         logger.warning(
-            "Call quality trigger failed. call_id=%s",
-            event.call_id,
+            "Call quality trigger failed. call_id=%s error=%s",
+            call_id,
+            _error_text(exc),
             exc_info=True,
         )
 
@@ -110,6 +141,12 @@ def _fetch_id_token(audience: str) -> str:
     request = google_requests.Request()
     token = id_token.fetch_id_token(request, audience)  # type: ignore[no-untyped-call]
     return str(token)
+
+
+def _error_text(error: Exception) -> str:
+    """Return a useful one-line error for structured trigger logs."""
+
+    return str(error) or error.__class__.__name__
 
 
 async def _post_trigger(

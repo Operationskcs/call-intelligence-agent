@@ -11,6 +11,7 @@ from fastapi import APIRouter, Header, HTTPException, Request, status
 
 from app.models.call_event import CallEvent, CallSource
 from app.worker import pipeline
+from app.worker.pipeline import ManualReviewRequiredError
 from app.worker.steps import s1_ingest
 
 router = APIRouter()
@@ -63,7 +64,10 @@ async def handle_phoneburner_webhook(payload: dict[str, Any]) -> dict[str, str]:
         return {"status": "already_processed", "call_id": parsed_payload.call_id}
 
     event = build_call_event(parsed_payload, payload)
-    await pipeline.run(event)
+    try:
+        await pipeline.run(event)
+    except ManualReviewRequiredError:
+        return {"status": "manual_review_required", "call_id": event.call_id}
     return {"status": "accepted", "call_id": event.call_id}
 
 

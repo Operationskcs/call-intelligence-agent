@@ -164,7 +164,7 @@ async def _filter_unprocessed(events: list[CallEvent]) -> list[CallEvent]:
     logger.info(
         "Cloud SQL call_audit_log batch idempotency SQL used to exclude "
         "already-processed call IDs:\n%s\nCriterion: call_id is processed when "
-        "processed_at IS NOT NULL AND error_message IS NULL. Checking %d "
+        "processed_at IS NOT NULL AND status IN ('succeeded', 'failed'). Checking %d "
         "candidate call_id(s) in one PostgreSQL array query.",
         PROCESSED_CALL_IDS_QUERY.strip(),
         len(call_ids),

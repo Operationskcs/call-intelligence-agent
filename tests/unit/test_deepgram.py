@@ -80,11 +80,11 @@ def test_format_deepgram_transcript_prefixes_utterances_with_start_timestamps() 
         }
     )
 
-    assert transcript == "00:05 [Agent]: hello\n01:12 [Lead]: hi there"
+    assert transcript == "00:05 [Speaker 0]: hello\n01:12 [Speaker 1]: hi there"
 
 
-def test_format_deepgram_transcript_uses_first_utterance_speaker_as_agent() -> None:
-    """Outbound calls should label the first detected utterance speaker as the agent."""
+def test_format_deepgram_transcript_preserves_utterance_speaker_ids() -> None:
+    """Utterance-level diarization should not assign participant roles."""
 
     transcript = deepgram._format_deepgram_transcript(
         {
@@ -99,14 +99,14 @@ def test_format_deepgram_transcript_uses_first_utterance_speaker_as_agent() -> N
     )
 
     assert transcript == (
-        "00:00 [Agent]: hello from intake\n"
-        "00:03 [Lead]: hello\n"
-        "00:05 [Lead]: joining now"
+        "00:00 [Speaker 1]: hello from intake\n"
+        "00:03 [Speaker 0]: hello\n"
+        "00:05 [Speaker 2]: joining now"
     )
 
 
-def test_format_deepgram_transcript_labels_single_speaker_calls_as_agent() -> None:
-    """Single-speaker outbound calls should not be labeled as lead-only calls."""
+def test_format_deepgram_transcript_preserves_single_speaker_id() -> None:
+    """Single-speaker calls should keep the raw diarization speaker id."""
 
     transcript = deepgram._format_deepgram_transcript(
         {
@@ -119,4 +119,4 @@ def test_format_deepgram_transcript_labels_single_speaker_calls_as_agent() -> No
         }
     )
 
-    assert transcript == "00:00 [Agent]: hello\n00:04 [Agent]: following up"
+    assert transcript == "00:00 [Speaker 1]: hello\n00:04 [Speaker 1]: following up"

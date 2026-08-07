@@ -185,6 +185,32 @@ async def test_receive_phoneburner_webhook_runs_pipeline_for_accepted_call(
     assert event.raw_payload["end_time"] == "2026-07-23T14:30:00Z"
 
 
+async def test_receive_phoneburner_webhook_returns_manual_review_required(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Manual-review calls should acknowledge the webhook instead of returning 500."""
+
+    monkeypatch.setenv("WEBHOOK_SECRET_TOKEN", "secret")
+
+    async def fake_check_idempotency(call_id: str) -> bool:
+        assert call_id == "pb-call-123"
+        return False
+
+    async def fake_pipeline_run(event: CallEvent) -> None:
+        raise pipeline.ManualReviewRequiredError(pipeline.MANUAL_REVIEW_ERROR_MESSAGE)
+
+    monkeypatch.setattr(s1_ingest, "check_idempotency", fake_check_idempotency)
+    monkeypatch.setattr(pipeline, "run", fake_pipeline_run)
+
+    response = await _post_phoneburner(_payload())
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "manual_review_required",
+        "call_id": "pb-call-123",
+    }
+
+
 async def test_receive_phoneburner_webhook_rejects_invalid_token(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

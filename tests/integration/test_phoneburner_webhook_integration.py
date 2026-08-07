@@ -29,6 +29,10 @@ async def test_phoneburner_webhook_runs_pipeline_with_mocked_steps(
         calls.append(f"s1:{call_id}")
         return False
 
+    async def fake_try_reserve_call_id(call_id: str, source: str) -> bool:
+        _ = call_id, source
+        return True
+
     async def fake_fetch_recording(event: CallEvent) -> CallEvent:
         calls.append(f"s2:{event.call_id}")
         assert event.source is CallSource.PHONEBURNER
@@ -86,6 +90,7 @@ async def test_phoneburner_webhook_runs_pipeline_with_mocked_steps(
         )
 
     monkeypatch.setattr(s1_ingest, "check_idempotency", fake_check_idempotency)
+    monkeypatch.setattr(pipeline.audit, "try_reserve_call_id", fake_try_reserve_call_id)
     monkeypatch.setattr(s2_fetch, "fetch_recording", fake_fetch_recording)
     monkeypatch.setattr(s3_transcribe, "transcribe", fake_transcribe)
     monkeypatch.setattr(s4_extract, "extract", fake_extract)

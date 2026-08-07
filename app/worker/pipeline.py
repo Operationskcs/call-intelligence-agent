@@ -2,6 +2,7 @@
 
 import logging
 
+import app.storage.audit as audit
 from app.adapters.crm.factory import get_crm_clients
 from app.models.call_event import CallEvent
 from app.models.match_result import MatchMethod, MatchResult
@@ -50,6 +51,13 @@ async def run(event: CallEvent) -> None:
     try:
         if await s1_ingest.check_idempotency(event.call_id):
             logger.info("Skipping already processed call_id=%s", event.call_id)
+            return
+
+        if not await audit.try_reserve_call_id(event.call_id, event.source.value):
+            logger.info(
+                "Skipping call_id=%s: already claimed by a concurrent run",
+                event.call_id,
+            )
             return
 
         event = await s2_fetch.fetch_recording(event)

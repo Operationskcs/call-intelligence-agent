@@ -7,9 +7,16 @@ import asyncpg
 
 from app.config import get_settings
 
+AUDIT_STATUS_LEGACY_UNPROCESSED = "legacy_unprocessed"
+AUDIT_STATUS_PROCESSING = "processing"
+AUDIT_STATUS_SUCCEEDED = "succeeded"
+AUDIT_STATUS_FAILED = "failed"
+PROCESSING_RECLAIM_TTL_SECONDS = 30 * 60
+
 _ALLOWED_COLUMNS = {
     "call_id",
     "source",
+    "status",
     "workspace",
     "crm_record_id",
     "phone_from",
@@ -24,16 +31,14 @@ _ALLOWED_COLUMNS = {
     "review_required",
     "error_message",
     "processed_at",
+    "reserved_at",
+    "updated_at",
 }
 
 DEEPGRAM_NO_TRANSCRIPT_ERROR_MESSAGE = "Deepgram returned no transcript"
 DEEPGRAM_BAD_REQUEST_ERROR_MESSAGE = (
     "Deepgram bad request: corrupt or unsupported audio"
 )
-TERMINAL_PROCESSED_ERROR_MESSAGES = {
-    DEEPGRAM_NO_TRANSCRIPT_ERROR_MESSAGE,
-    DEEPGRAM_BAD_REQUEST_ERROR_MESSAGE,
-}
 
 IS_PROCESSED_QUERY = """
 SELECT EXISTS (
@@ -41,13 +46,7 @@ SELECT EXISTS (
     FROM call_audit_log
     WHERE call_id = $1
       AND processed_at IS NOT NULL
-      AND (
-        error_message IS NULL
-        OR error_message IN (
-          'Deepgram returned no transcript',
-          'Deepgram bad request: corrupt or unsupported audio'
-        )
-      )
+      AND status IN ('succeeded', 'failed')
 )
 """
 
@@ -56,13 +55,16 @@ SELECT call_id
 FROM call_audit_log
 WHERE call_id = ANY($1)
   AND processed_at IS NOT NULL
-  AND (
-    error_message IS NULL
-    OR error_message IN (
-      'Deepgram returned no transcript',
-      'Deepgram bad request: corrupt or unsupported audio'
-    )
-  )
+  AND status IN ('succeeded', 'failed')
+"""
+
+RECLAIMABLE_PROCESSING_CALL_IDS_QUERY = """
+SELECT call_id
+FROM call_audit_log
+WHERE status = 'processing'
+  AND updated_at < NOW() - ($1::double precision * INTERVAL '1 second')
+ORDER BY updated_at ASC
+LIMIT $2
 """
 
 
@@ -93,6 +95,41 @@ async def upsert_call_log(row: dict[str, Any]) -> None:
     connection = await _connect()
     try:
         await connection.execute(query, *values)
+    finally:
+        await connection.close()
+
+
+async def try_reserve_call_id(
+    call_id: str,
+    source: str,
+    *,
+    reclaim_after_seconds: int = PROCESSING_RECLAIM_TTL_SECONDS,
+) -> bool:
+    """Atomically claim call_id before processing.
+
+    Returns True for a new claim or an expired processing reclaim.
+    Terminal and legacy-unprocessed rows are never automatically reopened.
+    """
+
+    query = (
+        "INSERT INTO call_audit_log (call_id, source, status, reserved_at, updated_at) "
+        "VALUES ($1, $2, 'processing', NOW(), NOW()) "
+        "ON CONFLICT (call_id) DO UPDATE SET "
+        "source = EXCLUDED.source, "
+        "status = EXCLUDED.status, "
+        "reserved_at = EXCLUDED.reserved_at, "
+        "updated_at = EXCLUDED.updated_at, "
+        "processed_at = NULL, "
+        "error_message = NULL "
+        "WHERE call_audit_log.status = 'processing' "
+        "AND call_audit_log.updated_at < "
+        "NOW() - ($3::double precision * INTERVAL '1 second') "
+        "RETURNING call_id"
+    )
+    connection = await _connect()
+    try:
+        row = await connection.fetchrow(query, call_id, source, reclaim_after_seconds)
+        return row is not None
     finally:
         await connection.close()
 

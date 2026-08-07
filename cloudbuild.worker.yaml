@@ -13,5 +13,24 @@ steps:
       - us-central1-docker.pkg.dev/keep-calm-database/call-intelligence-agent/call-intelligence-worker:latest
       - .
 
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - us-central1-docker.pkg.dev/keep-calm-database/call-intelligence-agent/call-intelligence-worker:latest
+
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - jobs
+      - update
+      - call-intelligence-worker
+      - --image
+      - us-central1-docker.pkg.dev/keep-calm-database/call-intelligence-agent/call-intelligence-worker:latest
+      - --region
+      - us-central1
+      - --project
+      - keep-calm-database
+
 images:
   - us-central1-docker.pkg.dev/keep-calm-database/call-intelligence-agent/call-intelligence-worker:latest

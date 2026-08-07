@@ -1,5 +1,6 @@
 """Tests for pipeline terminal-state handling."""
 
+import asyncio
 from datetime import UTC, datetime
 
 import pytest
@@ -9,6 +10,17 @@ from app.models.call_event import CallSource
 from app.models.match_result import MatchMethod, MatchResult
 from app.models.note import ExtractedNote
 from app.worker import pipeline
+
+
+@pytest.fixture(autouse=True)
+def reserve_call_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Default pipeline tests to an available reservation."""
+
+    async def fake_try_reserve_call_id(call_id: str, source: str) -> bool:
+        _ = call_id, source
+        return True
+
+    monkeypatch.setattr(pipeline.audit, "try_reserve_call_id", fake_try_reserve_call_id)
 
 
 async def test_manual_review_is_audited_without_error(
@@ -216,6 +228,132 @@ async def test_successful_crm_write_notifies_call_quality_trigger(
             "processed_at": processed_at,
         }
     ]
+
+
+async def test_concurrent_runs_for_same_call_id_only_process_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The audit reservation should stop duplicate webhook deliveries before s2."""
+
+    event_one = _call_event()
+    event_two = _call_event()
+    note = _extracted_note()
+    transcript = "[Agent]: hello\n[Lead]: hello"
+    processed_at = datetime(2026, 7, 31, 12, 30, tzinfo=UTC)
+    check_arrivals = 0
+    both_checked = asyncio.Event()
+    reserve_lock = asyncio.Lock()
+    reserved_call_ids: set[str] = set()
+    calls: list[str] = []
+
+    async def fake_check_idempotency(call_id: str) -> bool:
+        nonlocal check_arrivals
+        calls.append(f"s1:{call_id}")
+        check_arrivals += 1
+        if check_arrivals == 2:
+            both_checked.set()
+        await both_checked.wait()
+        return False
+
+    async def fake_try_reserve_call_id(call_id: str, source: str) -> bool:
+        calls.append(f"reserve:{call_id}:{source}")
+        async with reserve_lock:
+            if call_id in reserved_call_ids:
+                return False
+            reserved_call_ids.add(call_id)
+            return True
+
+    async def fake_fetch_recording(call_event: CallEvent) -> CallEvent:
+        calls.append(f"s2:{call_event.call_id}")
+        await asyncio.sleep(0)
+        return call_event
+
+    async def fake_transcribe(call_event: CallEvent) -> str:
+        calls.append(f"s3:{call_event.call_id}")
+        return transcript
+
+    async def fake_extract(call_transcript: str, workspace: str) -> ExtractedNote:
+        calls.append(f"s4:{workspace}")
+        assert call_transcript == transcript
+        return note
+
+    async def fake_match_lead(
+        call_event: CallEvent,
+        crm_clients: object,
+    ) -> MatchResult:
+        calls.append(f"s5:{call_event.call_id}")
+        _ = crm_clients
+        return MatchResult(
+            crm_record_id="lead-123",
+            workspace="intake",
+            confidence=1.0,
+            method=MatchMethod.PHONE,
+            requires_review=False,
+            agent_name=call_event.agent_name,
+        )
+
+    def fake_route(match_result: MatchResult, call_event: CallEvent) -> None:
+        calls.append(f"s6:{call_event.call_id}:{match_result.crm_record_id}")
+
+    async def fake_write_note(
+        match_result: MatchResult,
+        extracted_note: ExtractedNote,
+        call_event: CallEvent,
+        call_transcript: str,
+    ) -> None:
+        calls.append(f"s7:{call_event.call_id}:{match_result.crm_record_id}")
+        assert extracted_note is note
+        assert call_transcript == transcript
+
+    async def fake_log_result(
+        call_event: CallEvent,
+        match_result: MatchResult,
+        extracted_note: ExtractedNote | None,
+        error: str | None,
+    ) -> datetime:
+        calls.append(f"s8:{call_event.call_id}")
+        assert match_result.requires_review is False
+        assert extracted_note is note
+        assert error is None
+        return processed_at
+
+    async def fake_notify_call_quality_trigger(
+        *,
+        event: CallEvent,
+        match: MatchResult,
+        note: ExtractedNote,
+        transcript: str,
+        processed_at: datetime,
+    ) -> None:
+        _ = match, note, transcript, processed_at
+        calls.append(f"quality:{event.call_id}")
+
+    monkeypatch.setattr(pipeline.s1_ingest, "check_idempotency", fake_check_idempotency)
+    monkeypatch.setattr(pipeline.audit, "try_reserve_call_id", fake_try_reserve_call_id)
+    monkeypatch.setattr(pipeline.s2_fetch, "fetch_recording", fake_fetch_recording)
+    monkeypatch.setattr(pipeline.s3_transcribe, "transcribe", fake_transcribe)
+    monkeypatch.setattr(pipeline.s4_extract, "extract", fake_extract)
+    monkeypatch.setattr(pipeline.s5_match, "match_lead", fake_match_lead)
+    monkeypatch.setattr(pipeline.s6_route, "route", fake_route)
+    monkeypatch.setattr(pipeline.s7_write, "write_note", fake_write_note)
+    monkeypatch.setattr(pipeline.s8_audit, "log_result", fake_log_result)
+    monkeypatch.setattr(
+        pipeline,
+        "notify_call_quality_trigger",
+        fake_notify_call_quality_trigger,
+    )
+    monkeypatch.setattr(pipeline, "get_crm_clients", lambda: {})
+
+    await asyncio.gather(pipeline.run(event_one), pipeline.run(event_two))
+
+    assert calls.count("s1:pb-call-123") == 2
+    assert calls.count("reserve:pb-call-123:phoneburner") == 2
+    assert calls.count("s2:pb-call-123") == 1
+    assert calls.count("s3:pb-call-123") == 1
+    assert calls.count("s4:intake") == 1
+    assert calls.count("s5:pb-call-123") == 1
+    assert calls.count("s7:pb-call-123:lead-123") == 1
+    assert calls.count("s8:pb-call-123") == 1
 
 
 async def test_successful_non_intake_crm_write_skips_call_quality_trigger(

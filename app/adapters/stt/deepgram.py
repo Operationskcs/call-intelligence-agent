@@ -111,7 +111,6 @@ def _format_utterances(response_json: dict[str, Any]) -> list[str]:
     if not isinstance(utterances, list):
         return []
 
-    agent_speaker = _first_utterance_speaker(utterances)
     lines: list[str] = []
     for utterance in utterances:
         if not isinstance(utterance, dict):
@@ -120,7 +119,7 @@ def _format_utterances(response_json: dict[str, Any]) -> list[str]:
         if not isinstance(transcript, str) or not transcript.strip():
             continue
         speaker_turn = (
-            f"[{_utterance_speaker_label(utterance.get('speaker'), agent_speaker)}]: "
+            f"[{_speaker_label(utterance.get('speaker'))}]: "
             f"{transcript.strip()}"
         )
         timestamp = _format_timestamp(utterance.get("start"))
@@ -208,40 +207,11 @@ def _word_text(word: dict[str, Any]) -> str | None:
 
 
 def _speaker_label(speaker: Any) -> str:
-    """Convert Deepgram speaker identifiers into app-level speaker labels."""
+    """Convert Deepgram speaker identifiers into raw diarization labels."""
 
-    if speaker == 0:
-        return "Agent"
-    if speaker == 1:
-        return "Lead"
     if speaker is None:
         return "Unknown"
     return f"Speaker {speaker}"
-
-
-def _first_utterance_speaker(utterances: list[Any]) -> object | None:
-    """Return the first speaker with transcript text from Deepgram utterances."""
-
-    for utterance in utterances:
-        if not isinstance(utterance, dict):
-            continue
-        transcript = utterance.get("transcript")
-        if not isinstance(transcript, str) or not transcript.strip():
-            continue
-        speaker: object | None = utterance.get("speaker")
-        if speaker is not None:
-            return speaker
-    return None
-
-
-def _utterance_speaker_label(speaker: Any, agent_speaker: object | None) -> str:
-    """Label the first utterance speaker as Agent and every other speaker as Lead."""
-
-    if agent_speaker is None:
-        return _speaker_label(speaker)
-    if speaker is None:
-        return "Unknown"
-    return "Agent" if speaker == agent_speaker else "Lead"
 
 
 def _format_timestamp(raw_seconds: Any) -> str | None:

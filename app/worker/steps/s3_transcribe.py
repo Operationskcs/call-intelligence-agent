@@ -6,6 +6,7 @@ from app.adapters.stt.google_stt import GoogleSTTAdapter
 from app.adapters.stt.passthrough import PassthroughAdapter
 from app.config import get_settings
 from app.models.call_event import CallEvent
+from app.services.speaker_role import resolve_speaker_roles
 
 
 async def transcribe(event: CallEvent) -> str:
@@ -24,4 +25,5 @@ async def transcribe(event: CallEvent) -> str:
     else:
         raise ValueError(f"Unsupported STT_PROVIDER: {settings.stt.provider}")
 
-    return await adapter.transcribe(event.gcs_audio_uri)
+    raw_transcript = await adapter.transcribe(event.gcs_audio_uri)
+    return resolve_speaker_roles(raw_transcript, event)
