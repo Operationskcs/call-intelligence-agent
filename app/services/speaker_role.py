@@ -36,7 +36,7 @@ _EXPLICIT_LEAD_KEYS = (
 _AGENT_PATTERNS = tuple(
     re.compile(pattern, re.IGNORECASE)
     for pattern in (
-        r"\b(te|le)\s+llam(o|ó|aba)\b",
+        r"\b(te|le)\s+llam(a|o|ó|aba)\b",
         r"\bde parte\b",
         r"firma de abogados",
         r"equipo legal",
@@ -47,11 +47,10 @@ _AGENT_PATTERNS = tuple(
         r"calling from",
         r"this is .* calling",
         r"c[oó]mo te encuentras",
-        r"c[oó]mo est[aá]s",
-        r"schedule",
-        r"appointment",
-        r"doctor'?s office",
-        r"clinic",
+        r"\b(schedule|scheduled|scheduling)\s+(a|an|your|the)?\s*(appointment|consultation)\b",
+        r"\b(confirm|confirming|set up|book|booking)\s+(a|an|your|the)?\s*appointment\b",
+        r"\b(calling from|from|with)\s+(the\s+)?doctor'?s office\b",
+        r"\b(calling from|from|with)\s+(the\s+)?[\w\s'-]{0,40}\bclinic\b",
         r"medhub",
     )
 )
@@ -62,15 +61,15 @@ _LEAD_PATTERNS = tuple(
         r"\bmi carro\b",
         r"\bmi accidente\b",
         r"\byo iba\b",
-        r"manejando",
-        r"\bdolor\b",
-        r"hospital",
-        r"terapia",
-        r"doctor",
-        r"aseguranza",
-        r"seguro",
+        r"\byo\b.{0,40}\bmanejando\b|\b(yo\s+)?estaba manejando\b",
+        r"\bmi dolor\b|\bme duele\b|\btengo dolor\b",
+        r"\b(estuve|fui|me llevaron|me mandaron)\s+(al|a la)\s+hospital\b",
+        r"\bmi terapia\b|\bestoy en terapia\b|\bvoy a terapia\b|\bme mandaron a terapia\b",
+        r"\bmi doctor(a)?\b|\bfui al doctor(a)?\b|\bme vio el doctor(a)?\b|\btengo doctor(a)?\b",
+        r"\bmi aseguranza\b|\btengo aseguranza\b|\bno tengo aseguranza\b",
+        r"\bmi seguro\b|\btengo seguro\b|\bno tengo seguro\b|\bmi compa[nñ][ií]a de seguros\b",
         r"\bfirm[eé]\b",
-        r"\babogado\b",
+        r"\bmi abogado(a)?\b|\btengo abogado(a)?\b|\bno tengo abogado(a)?\b",
         r"no estoy interesado",
         r"no me interesa",
         r"\bme lastim",
@@ -265,9 +264,13 @@ def _semantic_role_map(turns: list[_Turn], speakers: list[str]) -> dict[str, Rol
         return _complete_role_map({agent_candidate: "Agent", lead_candidate: "Lead"}, speakers)
 
     if agent_candidate:
+        if _has_role_evidence(scores, role="lead"):
+            return None
         return _complete_role_map({agent_candidate: "Agent"}, speakers)
 
     if lead_candidate:
+        if _has_role_evidence(scores, role="agent"):
+            return None
         return _complete_role_map({lead_candidate: "Lead"}, speakers)
 
     return None
@@ -284,6 +287,10 @@ def _speaker_scores(turns: list[_Turn]) -> dict[str, Counter[str]]:
 
 def _pattern_hits(text: str, patterns: tuple[re.Pattern[str], ...]) -> int:
     return sum(1 for pattern in patterns if pattern.search(text))
+
+
+def _has_role_evidence(scores: dict[str, Counter[str]], *, role: Literal["agent", "lead"]) -> bool:
+    return any(speaker_scores[role] > 0 for speaker_scores in scores.values())
 
 
 def _best_speaker(scores: dict[str, Counter[str]], *, role: Literal["agent", "lead"]) -> str | None:

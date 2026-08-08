@@ -1,8 +1,11 @@
 """Tests for resolving raw diarized speakers into participant roles."""
 
+from collections import Counter
+
 import pytest
 
 from app.models.call_event import CallEvent, CallSource
+from app.services import speaker_role
 from app.services.speaker_role import resolve_speaker_roles
 
 
@@ -74,6 +77,99 @@ def test_resolve_speaker_roles_ignores_conflicting_metadata(
         "00:04 [Agent]: te llamo de parte de la firma de abogados"
     )
     assert "conflicting speaker role metadata ignored" in caplog.text
+
+
+def test_lead_topic_words_require_person_bound_context() -> None:
+    """Agent questions about case topics should not score as Lead evidence."""
+
+    transcript = (
+        "00:00 [Speaker 0]: te llama Rafael de parte de la firma de abogados. "
+        "Tienes seguro, dolor, hospital, terapia, doctor, abogado o ibas manejando?\n"
+        "00:05 [Speaker 1]: hola"
+    )
+
+    scores = speaker_role._speaker_scores(speaker_role._parse_turns(transcript))
+
+    assert scores["Speaker 0"]["agent"] > 0
+    assert scores["Speaker 0"]["lead"] == 0
+
+
+def test_person_bound_lead_patterns_still_resolve_lead() -> None:
+    """First-person lead phrases should still work after tightening topic words."""
+
+    event = _event(raw_payload={})
+    transcript = (
+        "00:00 [Speaker 0]: me duele mucho y no tengo seguro desde mi accidente\n"
+        "00:04 [Speaker 1]: te llamo de parte de la firma de abogados"
+    )
+
+    assert resolve_speaker_roles(transcript, event) == (
+        "00:00 [Lead]: me duele mucho y no tengo seguro desde mi accidente\n"
+        "00:04 [Agent]: te llamo de parte de la firma de abogados"
+    )
+
+
+def test_semantic_partial_resolution_with_mixed_evidence_falls_back(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The 3060257549 score shape should not produce an all-Lead transcript."""
+
+    def fake_speaker_scores(
+        turns: list[speaker_role._Turn],
+    ) -> dict[str, Counter[str]]:
+        _ = turns
+        return {
+            "Speaker 0": Counter({"agent": 6, "lead": 24}),
+            "Speaker 1": Counter({"agent": 1, "lead": 4}),
+            "Speaker 2": Counter({"agent": 0, "lead": 1}),
+        }
+
+    monkeypatch.setattr(speaker_role, "_speaker_scores", fake_speaker_scores)
+    event = _event(call_id="3060257549", agent_name=None, raw_payload={})
+    transcript = (
+        "00:00 [Speaker 1]: hola marcelo buenas tardes\n"
+        "00:05 [Speaker 0]: de parte de la firma de abogados parte del equipo legal\n"
+        "00:13 [Speaker 2]: ruido"
+    )
+
+    with caplog.at_level("WARNING"):
+        resolved = resolve_speaker_roles(transcript, event)
+
+    assert resolved == (
+        "00:00 [Agent]: hola marcelo buenas tardes\n"
+        "00:05 [Lead]: de parte de la firma de abogados parte del equipo legal\n"
+        "00:13 [Lead]: ruido"
+    )
+    assert resolved.count("[Agent]:") == 1
+    assert (
+        "speaker role resolved via fallback heuristic, no reliable metadata "
+        "for call_id=3060257549"
+    ) in caplog.text
+
+
+def test_semantic_partial_resolution_without_opposite_evidence_still_applies() -> None:
+    """Short one-sided semantic evidence can still resolve the speaking agent."""
+
+    event = _event(agent_name=None, raw_payload={})
+    transcript = (
+        "00:00 [Speaker 0]: hola\n"
+        "00:03 [Speaker 1]: calling from the legal team to schedule an appointment"
+    )
+
+    assert resolve_speaker_roles(transcript, event) == (
+        "00:00 [Lead]: hola\n"
+        "00:03 [Agent]: calling from the legal team to schedule an appointment"
+    )
+
+
+def test_single_speaker_short_agent_call_still_falls_back_to_agent() -> None:
+    """Single-speaker voicemail-style transcripts keep the legacy Agent fallback."""
+
+    event = _event(call_id="short-agent-call", agent_name=None, raw_payload={})
+    transcript = "00:00 [Speaker 0]: michael del equipo legal"
+
+    assert resolve_speaker_roles(transcript, event) == "00:00 [Agent]: michael del equipo legal"
 
 
 @pytest.mark.parametrize(
