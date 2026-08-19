@@ -326,6 +326,13 @@ async def test_poll_new_calls_filters_idempotency_before_capping(
     monkeypatch.setattr(s1_ingest, "_poll_phoneburner", fake_poll_phoneburner)
     monkeypatch.setattr(s1_ingest, "_poll_ringcentral_api", fake_poll_ringcentral_api)
     monkeypatch.setattr(s1_ingest, "_filter_unprocessed", fake_filter_unprocessed)
+    monkeypatch.setattr(
+        s1_ingest,
+        "get_settings",
+        lambda: SimpleNamespace(
+            pipeline=SimpleNamespace(enable_phoneburner_polling=True),
+        ),
+    )
 
     events = await s1_ingest.poll_new_calls()
 
@@ -353,8 +360,64 @@ async def test_poll_new_calls_deduplicates_before_idempotency(
     monkeypatch.setattr(s1_ingest, "_poll_phoneburner", fake_poll_phoneburner)
     monkeypatch.setattr(s1_ingest, "_poll_ringcentral_api", fake_poll_ringcentral_api)
     monkeypatch.setattr(s1_ingest, "_filter_unprocessed", fake_filter_unprocessed)
+    monkeypatch.setattr(
+        s1_ingest,
+        "get_settings",
+        lambda: SimpleNamespace(
+            pipeline=SimpleNamespace(enable_phoneburner_polling=True),
+        ),
+    )
 
     events = await s1_ingest.poll_new_calls()
 
     assert captured_call_ids == ["call-1", "call-2"]
     assert [event.call_id for event in events] == ["call-1", "call-2"]
+
+
+async def test_poll_new_calls_skips_phoneburner_when_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Disabling PhoneBurner polling must leave RingCentral polling active."""
+
+    phoneburner_called = False
+    ringcentral_called = False
+    ringcentral_event = _call_event(1).model_copy(
+        update={
+            "call_id": "rc-1",
+            "source": CallSource.RINGCENTRAL,
+            "workspace": "medhub",
+        }
+    )
+
+    async def fake_poll_phoneburner() -> list[CallEvent]:
+        nonlocal phoneburner_called
+        phoneburner_called = True
+        return [_call_event(1)]
+
+    async def fake_poll_ringcentral_api() -> list[CallEvent]:
+        nonlocal ringcentral_called
+        ringcentral_called = True
+        return [ringcentral_event]
+
+    async def fake_filter_unprocessed(events: list[CallEvent]) -> list[CallEvent]:
+        return events
+
+    monkeypatch.setattr(s1_ingest, "_poll_phoneburner", fake_poll_phoneburner)
+    monkeypatch.setattr(s1_ingest, "_poll_ringcentral_api", fake_poll_ringcentral_api)
+    monkeypatch.setattr(s1_ingest, "_filter_unprocessed", fake_filter_unprocessed)
+    monkeypatch.setattr(
+        s1_ingest,
+        "get_settings",
+        lambda: SimpleNamespace(
+            pipeline=SimpleNamespace(enable_phoneburner_polling=False),
+        ),
+    )
+
+    with caplog.at_level("INFO"):
+        events = await s1_ingest.poll_new_calls()
+
+    assert not phoneburner_called
+    assert ringcentral_called
+    assert events == [ringcentral_event]
+    assert "PhoneBurner polling disabled via config" in caplog.text

@@ -38,8 +38,15 @@ _RINGCENTRAL_MIN_CALL_DURATION_SECONDS = 15
 async def poll_new_calls() -> list[CallEvent]:
     """Legacy: poll call sources for recent connected calls and return unprocessed events."""
 
+    settings = get_settings()
+    if settings.pipeline.enable_phoneburner_polling:
+        phoneburner_poll = _poll_phoneburner()
+    else:
+        logger.info("PhoneBurner polling disabled via config")
+        phoneburner_poll = _poll_no_phoneburner_events()
+
     phoneburner_events, ringcentral_events = await asyncio.gather(
-        _poll_phoneburner(),
+        phoneburner_poll,
         _poll_ringcentral_api(),
     )
 
@@ -47,6 +54,12 @@ async def poll_new_calls() -> list[CallEvent]:
     events = _dedupe_events_by_call_id(events)
     unprocessed_events = await _filter_unprocessed(events)
     return _cap_unprocessed_batch(unprocessed_events)
+
+
+async def _poll_no_phoneburner_events() -> list[CallEvent]:
+    """Return no PhoneBurner events when polling is disabled."""
+
+    return []
 
 
 async def poll_legacy_phoneburner_calls() -> list[CallEvent]:

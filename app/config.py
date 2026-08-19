@@ -155,6 +155,10 @@ class DatabaseSettings(EnvSettings):
 class PipelineSettings(EnvSettings):
     """Pipeline behavior and review queue settings."""
 
+    enable_phoneburner_polling: bool = Field(
+        default=True,
+        validation_alias="ENABLE_PHONEBURNER_POLLING",
+    )
     call_quality_trigger_url: str = Field(
         default=(
             "https://call-quality-trigger-znesczxkka-uc.a.run.app/"
@@ -213,6 +217,7 @@ class Settings(EnvSettings):
             "bq_project": self.gcp.bq_project,
             "poll_interval_minutes": self.pipeline.poll_interval_minutes,
             "call_quality_trigger_url": self.pipeline.call_quality_trigger_url,
+            "enable_phoneburner_polling": self.pipeline.enable_phoneburner_polling,
             "phoneburner_lookback_hours": self.pipeline.phoneburner_lookback_hours,
             "ringcentral_lookback_minutes": self.pipeline.ringcentral_lookback_minutes,
             "pubsub_topic": self.gcp.pubsub_topic_call_completed,
