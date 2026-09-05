@@ -13,7 +13,7 @@ _LEAD_NODE_FIELDS = """
 id
 name { firstName lastName }
 emails { primaryEmail }
-phones { primaryPhoneCallingCode primaryPhoneNumber }
+phones { primaryPhoneNumber }
 birthDate
 contactAttemptCount
 """
@@ -28,14 +28,13 @@ class IntakeCRMClient(TwentyGraphQLClient, CRMClient):
     """Workspace-scoped Twenty GraphQL client for Intake Leads."""
 
     async def find_record_by_phone(self, phone: str) -> dict[str, Any] | None:
-        """Find an Intake Lead by phones.primaryPhoneCallingCode and primaryPhoneNumber."""
+        """Find an Intake Lead by phones.primaryPhoneNumber."""
 
         normalized = self.normalize_phone(phone)
         query = f"""
-          query FindLeadByPhone($callingCode: String!, $phoneNumber: String!) {{
+          query FindLeadByPhone($phoneNumber: String!) {{
             leads(filter: {{
               phones: {{
-                primaryPhoneCallingCode: {{ eq: $callingCode }}
                 primaryPhoneNumber: {{ eq: $phoneNumber }}
               }}
             }}) {{
@@ -46,7 +45,6 @@ class IntakeCRMClient(TwentyGraphQLClient, CRMClient):
         data = await self.gql_request(
             query,
             {
-                "callingCode": normalized.calling_code,
                 "phoneNumber": normalized.number,
             },
         )
@@ -447,7 +445,7 @@ def _phone_call_to_phone(event: CallEvent) -> str:
     """Return the lead-facing phone number for Twenty PhoneCall.to."""
 
     if event.source is CallSource.PHONEBURNER:
-        return event.phone_from
+        return event.phone_to
     return event.phone_to
 
 

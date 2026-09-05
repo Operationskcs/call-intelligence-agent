@@ -59,10 +59,11 @@ async def match_lead(
 async def _match_by_phone(event: CallEvent, client: CRMClient) -> MatchResult | None:
     """Try a high-confidence phone match."""
 
-    if not event.phone_from:
+    lead_phone = _lead_phone_candidate(event)
+    if not lead_phone:
         return None
 
-    phone = _normalize_phone(event.phone_from)
+    phone = _normalize_phone(lead_phone)
     record = await client.find_record_by_phone(phone.e164)
     if not record:
         return None
@@ -155,6 +156,14 @@ def _match_result(
         matched_on_phone=matched_on_phone,
         agent_name=event.agent_name,
     )
+
+
+def _lead_phone_candidate(event: CallEvent) -> str:
+    """Return the source phone that belongs to the Lead for CRM matching."""
+
+    if event.workspace == "intake":
+        return event.phone_to
+    return event.phone_from
 
 
 async def _review_required(event: CallEvent, reason: str) -> MatchResult:

@@ -32,6 +32,40 @@ class _CapturingIntakeClient(IntakeCRMClient):
         return {"createPhoneCall": {"id": "phone-call-123"}}
 
 
+class _CapturingIntakeLeadLookupClient(IntakeCRMClient):
+    """Capture Intake Lead lookup GraphQL requests without making network calls."""
+
+    def __init__(self) -> None:
+        super().__init__(base_url="https://crm.example.test", api_token="test-token")
+        self.query: str | None = None
+        self.variables: dict[str, Any] | None = None
+
+    async def gql_request(
+        self,
+        query: str,
+        variables: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Capture the lookup query and return a fake Lead."""
+
+        self.query = query
+        self.variables = variables
+        return {"leads": {"edges": [{"node": {"id": "lead-123"}}]}}
+
+
+async def test_intake_phone_lookup_strips_us_country_code_prefix() -> None:
+    """Intake stores Lead phone numbers without the +1 country-code prefix."""
+
+    client = _CapturingIntakeLeadLookupClient()
+
+    record = await client.find_record_by_phone("+14157143441")
+
+    assert record == {"id": "lead-123"}
+    assert client.variables == {"phoneNumber": "4157143441"}
+    assert client.query is not None
+    assert "primaryPhoneNumber" in client.query
+    assert "primaryPhoneCallingCode" not in client.query
+
+
 def test_lead_update_payload_preserves_existing_manual_fields() -> None:
     """Operations-owned Lead fields must never be written by call intelligence."""
 
@@ -132,22 +166,22 @@ def test_note_markdown_includes_full_transcript_and_audio_recording() -> None:
     ]
 
 
-def test_phoneburner_phone_call_to_uses_lead_phone_not_endpoint_url() -> None:
-    """PhoneBurner endpoint/disposition URLs must never become PhoneCall.to."""
+def test_phoneburner_phone_call_to_uses_outbound_lead_phone() -> None:
+    """PhoneBurner outbound PhoneCall.to should be the called Lead phone."""
 
     event = CallEvent(
         call_id="pb-123",
         source=CallSource.PHONEBURNER,
         workspace="intake",
-        phone_from="+13055551234",
-        phone_to="https://phoneburner.example.test/disposition/abc",
+        phone_from="+17604105255",
+        phone_to="+14157143441",
         duration_sec=90,
         agent_id="Agent Name",
         gcs_audio_uri="gs://bucket/audio.mp3",
         raw_payload={},
     )
 
-    assert _phone_call_to_phone(event) == "+13055551234"
+    assert _phone_call_to_phone(event) == "+14157143441"
 
 
 async def test_create_phone_call_sets_call_name() -> None:
