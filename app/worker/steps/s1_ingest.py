@@ -237,8 +237,8 @@ def _phoneburner_row_to_event(row: dict[str, Any]) -> CallEvent:
         call_id=str(_required_value(raw_payload, "call_id")),
         source=CallSource.PHONEBURNER,
         workspace="intake",
-        phone_from=_nested_str(raw_payload, "contact", "phone"),
-        phone_to=_str_value(raw_payload.get("endpoint")),
+        phone_from=_str_value(raw_payload.get("outbound_caller_id")),
+        phone_to=_phoneburner_lead_phone(raw_payload),
         duration_sec=_int_value(raw_payload.get("duration")),
         agent_id=agent_name or None,
         agent_name=agent_name or None,
@@ -316,6 +316,24 @@ def _phoneburner_agent_name(raw_payload: dict[str, Any]) -> str:
             _nested_str(raw_payload, "agent", "last_name"),
         )
     )
+
+
+def _phoneburner_lead_phone(raw_payload: dict[str, Any]) -> str:
+    """Read the Lead phone from PhoneBurner contact metadata."""
+
+    phone = _nested_str(raw_payload, "contact", "phone")
+    if phone:
+        return phone
+
+    contact = _dict_value(raw_payload.get("contact"))
+    phones = contact.get("phones")
+    if not isinstance(phones, Sequence) or isinstance(phones, (str, bytes, bytearray)):
+        return ""
+
+    first_phone = phones[0] if phones else None
+    if isinstance(first_phone, Mapping):
+        return _str_value(first_phone.get("number"))
+    return _str_value(first_phone)
 
 
 def _is_ringcentral_connected_record(

@@ -64,6 +64,7 @@ def test_phoneburner_row_maps_from_name_to_agent_name() -> None:
         {
             "call_id": "pb-123",
             "contact": {"phone": "+13055551234"},
+            "outbound_caller_id": "+17865550100",
             "endpoint": "+17865550100",
             "duration": 90,
             "recording_gcs_uri": "gs://bucket/audio.mp3",
@@ -73,6 +74,42 @@ def test_phoneburner_row_maps_from_name_to_agent_name() -> None:
 
     assert event.agent_name == "PhoneBurner Agent"
     assert event.agent_id == "PhoneBurner Agent"
+
+
+def test_phoneburner_row_maps_contact_phone_to_lead_phone() -> None:
+    """PhoneBurner BigQuery contact.phone is the Intake Lead phone."""
+
+    event = _phoneburner_row_to_event(
+        {
+            "call_id": "pb-123",
+            "contact": {"phone": "3478205592"},
+            "outbound_caller_id": "+8788223165071",
+            "endpoint": "https://phoneburner.example.test/disposition/abc",
+            "duration": 90,
+            "recording_gcs_uri": "gs://bucket/audio.mp3",
+        }
+    )
+
+    assert event.phone_from == "+8788223165071"
+    assert event.phone_to == "3478205592"
+
+
+def test_phoneburner_row_falls_back_to_first_contact_phone_number() -> None:
+    """PhoneBurner contact.phones[0].number is the Lead phone fallback."""
+
+    event = _phoneburner_row_to_event(
+        {
+            "call_id": "pb-456",
+            "contact": {"phones": [{"number": "8223165071"}]},
+            "outbound_caller_id": "+12025094479",
+            "endpoint": "+15550000000",
+            "duration": 90,
+            "recording_gcs_uri": "gs://bucket/audio.mp3",
+        }
+    )
+
+    assert event.phone_from == "+12025094479"
+    assert event.phone_to == "8223165071"
 
 
 def test_ringcentral_filter_requires_connected_duration_and_recording() -> None:
