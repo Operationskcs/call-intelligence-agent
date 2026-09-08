@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
 
 from app.adapters.crm.base import CallWriteResult, CRMClient, TwentyCRMError, TwentyGraphQLClient
 from app.models.call_event import CallEvent, CallSource
 from app.models.note import ExtractedNote
+
+logger = logging.getLogger(__name__)
 
 _LEAD_NODE_FIELDS = """
 id
@@ -30,7 +33,12 @@ class IntakeCRMClient(TwentyGraphQLClient, CRMClient):
     async def find_record_by_phone(self, phone: str) -> dict[str, Any] | None:
         """Find an Intake Lead by phones.primaryPhoneNumber."""
 
-        normalized = self.normalize_phone(phone)
+        normalized_number = _phone_number_for_lookup(phone)
+        logger.info(
+            "Intake phone lookup: querying primaryPhoneNumber='%s' original_phone='%s'",
+            normalized_number,
+            phone,
+        )
         query = f"""
           query FindLeadByPhone($phoneNumber: String!) {{
             leads(filter: {{
@@ -45,7 +53,7 @@ class IntakeCRMClient(TwentyGraphQLClient, CRMClient):
         data = await self.gql_request(
             query,
             {
-                "phoneNumber": normalized.number,
+                "phoneNumber": normalized_number,
             },
         )
         return self.first_edge_node(data.get("leads"))
@@ -367,6 +375,15 @@ def _split_name(name: str) -> tuple[str, str]:
     if not parts:
         return "", ""
     return parts[0], " ".join(parts[1:])
+
+
+def _phone_number_for_lookup(phone: str) -> str:
+    """Return the last 10 digits stored in Intake Lead primaryPhoneNumber."""
+
+    digits = "".join(character for character in phone if character.isdigit())
+    if len(digits) >= 10:
+        return digits[-10:]
+    raise ValueError(f"Cannot normalize phone number {phone!r} for Intake CRM lookup.")
 
 
 def _format_note_markdown(

@@ -1,5 +1,6 @@
 """Tests for Intake CRM Lead update guardrails."""
 
+import logging
 from typing import Any
 
 from app.adapters.crm.intake import (
@@ -52,18 +53,33 @@ class _CapturingIntakeLeadLookupClient(IntakeCRMClient):
         return {"leads": {"edges": [{"node": {"id": "lead-123"}}]}}
 
 
-async def test_intake_phone_lookup_strips_us_country_code_prefix() -> None:
-    """Intake stores Lead phone numbers without the +1 country-code prefix."""
+async def test_intake_phone_lookup_uses_last_ten_digits(caplog: Any) -> None:
+    """Intake stores Lead phone numbers as the last 10 digits only."""
 
     client = _CapturingIntakeLeadLookupClient()
+    caplog.set_level(logging.INFO, logger="app.adapters.crm.intake")
 
-    record = await client.find_record_by_phone("+14157143441")
+    examples = {
+        "+12025094479": "2025094479",
+        "+8788223165071": "8223165071",
+        "+14157143441": "4157143441",
+        "2025094479": "2025094479",
+    }
 
-    assert record == {"id": "lead-123"}
-    assert client.variables == {"phoneNumber": "4157143441"}
-    assert client.query is not None
-    assert "primaryPhoneNumber" in client.query
-    assert "primaryPhoneCallingCode" not in client.query
+    for phone, expected_number in examples.items():
+        caplog.clear()
+
+        record = await client.find_record_by_phone(phone)
+
+        assert record == {"id": "lead-123"}
+        assert client.variables == {"phoneNumber": expected_number}
+        assert client.query is not None
+        assert "primaryPhoneNumber" in client.query
+        assert "primaryPhoneCallingCode" not in client.query
+        assert (
+            f"Intake phone lookup: querying primaryPhoneNumber='{expected_number}'"
+            in caplog.text
+        )
 
 
 def test_lead_update_payload_preserves_existing_manual_fields() -> None:
