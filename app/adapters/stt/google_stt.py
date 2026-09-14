@@ -9,10 +9,10 @@ class GoogleSTTAdapter(STTAdapter):
     supports_diarization = False
     supports_language_detection = False
 
-    async def transcribe(self, gcs_uri: str) -> str:
+    async def transcribe(self, gcs_uri: str, *, workspace: str | None = None) -> str:
         """Fallback adapter; implement if Deepgram quality is insufficient."""
 
-        _ = gcs_uri
+        _ = gcs_uri, workspace
         raise NotImplementedError(
             "Google STT fallback is pending quality evaluation against Deepgram output."
         )

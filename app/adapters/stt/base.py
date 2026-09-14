@@ -9,6 +9,6 @@ class STTAdapter(Protocol):
     supports_diarization: bool
     supports_language_detection: bool
 
-    async def transcribe(self, gcs_uri: str) -> str:
+    async def transcribe(self, gcs_uri: str, *, workspace: str | None = None) -> str:
         """Transcribe an audio file and return plain text with speaker labels."""
         ...

@@ -1,6 +1,7 @@
 """Deepgram speech-to-text adapter."""
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any, cast
 
 from deepgram import AsyncDeepgramClient
@@ -14,6 +15,18 @@ class DeepgramCreditsExhaustedError(RuntimeError):
     """Raised when Deepgram rejects transcription because credits are exhausted."""
 
 
+_WORD_TURN_GAP_SECONDS = 1.25
+
+
+@dataclass(frozen=True)
+class _MultichannelTurn:
+    """One timestamped transcript turn from a Deepgram audio channel."""
+
+    channel_index: int
+    start: float | None
+    text: str
+
+
 class DeepgramAdapter(STTAdapter):
     """Deepgram Python SDK adapter using the nova-2-phonecall model."""
 
@@ -25,7 +38,7 @@ class DeepgramAdapter(STTAdapter):
 
         self.api_key = api_key
 
-    async def transcribe(self, gcs_uri: str) -> str:
+    async def transcribe(self, gcs_uri: str, *, workspace: str | None = None) -> str:
         """Download GCS audio bytes and transcribe them with Deepgram."""
 
         if not self.api_key:
@@ -33,13 +46,11 @@ class DeepgramAdapter(STTAdapter):
 
         audio_bytes = await download_bytes(gcs_uri)
         client = AsyncDeepgramClient(api_key=self.api_key)
+        transcription_options = _transcription_options_for_workspace(workspace)
         try:
             response = await client.listen.v1.media.transcribe_file(
                 request=audio_bytes,
-                model="nova-2-phonecall",
-                diarize=True,
-                detect_language=True,
-                utterances=True,
+                **transcription_options,
             )
         except ApiError as exc:
             if _is_deepgram_credits_exhausted_error(exc):
@@ -48,7 +59,38 @@ class DeepgramAdapter(STTAdapter):
                 ) from exc
             raise
 
-        return _format_deepgram_transcript(_response_to_dict(response))
+        response_json = _response_to_dict(response)
+        if _uses_multichannel_transcription(workspace):
+            return _format_multichannel_transcript(response_json)
+        return _format_deepgram_transcript(response_json)
+
+
+def _transcription_options_for_workspace(workspace: str | None) -> dict[str, bool | str]:
+    """Return Deepgram request options for the given CRM workspace."""
+
+    options: dict[str, bool | str] = {
+        "model": "nova-2-phonecall",
+        "detect_language": True,
+        "utterances": True,
+    }
+    if _uses_multichannel_transcription(workspace):
+        options.update(
+            {
+                "multichannel": True,
+                "diarize": False,
+                "punctuate": True,
+            }
+        )
+        return options
+
+    options["diarize"] = True
+    return options
+
+
+def _uses_multichannel_transcription(workspace: str | None) -> bool:
+    """Return True for Intake calls, whose PhoneBurner recordings are stereo by speaker."""
+
+    return isinstance(workspace, str) and workspace.strip().lower() == "intake"
 
 
 def _is_deepgram_credits_exhausted_error(error: ApiError) -> bool:
@@ -102,6 +144,287 @@ def _format_deepgram_transcript(response_json: dict[str, Any]) -> str:
         return transcript
 
     raise ValueError("Deepgram response did not include a transcript.")
+
+
+def _format_multichannel_transcript(response_json: dict[str, Any]) -> str:
+    """Format Deepgram multichannel output into Agent/Lead transcript text."""
+
+    turns = _multichannel_turns(response_json)
+    if turns:
+        return "\n".join(_format_multichannel_turn_lines(turns))
+
+    raise ValueError("Deepgram response did not include a transcript.")
+
+
+def _multichannel_turns(response_json: dict[str, Any]) -> list[_MultichannelTurn]:
+    """Return all transcript turns from a Deepgram multichannel response."""
+
+    channels = response_json.get("results", {}).get("channels")
+    if not isinstance(channels, list) or not channels:
+        return []
+
+    root_utterance_turns = _root_multichannel_utterance_turns(response_json)
+    if root_utterance_turns:
+        return sorted(root_utterance_turns, key=_multichannel_turn_sort_key)
+
+    turns: list[_MultichannelTurn] = []
+    for channel_index, channel in enumerate(channels):
+        if not isinstance(channel, dict):
+            continue
+        turns.extend(_channel_turns(channel, channel_index))
+
+    return sorted(turns, key=_multichannel_turn_sort_key)
+
+
+def _root_multichannel_utterance_turns(
+    response_json: dict[str, Any],
+) -> list[_MultichannelTurn]:
+    """Return root-level Deepgram utterances when they include channel metadata."""
+
+    utterances = response_json.get("results", {}).get("utterances")
+    if not isinstance(utterances, list):
+        return []
+
+    turns: list[_MultichannelTurn] = []
+    for utterance in utterances:
+        if not isinstance(utterance, dict):
+            continue
+        channel_index = _channel_index(utterance.get("channel"))
+        if channel_index is None:
+            continue
+        transcript = _clean_transcript(utterance.get("transcript"))
+        if transcript is None:
+            continue
+        turns.append(
+            _MultichannelTurn(
+                channel_index=channel_index,
+                start=_seconds(utterance.get("start")),
+                text=transcript,
+            )
+        )
+
+    return turns
+
+
+def _channel_turns(channel: dict[str, Any], channel_index: int) -> list[_MultichannelTurn]:
+    """Return transcript turns from one Deepgram channel."""
+
+    utterance_turns = _channel_utterance_turns(channel, channel_index)
+    if utterance_turns:
+        return utterance_turns
+
+    word_turns = _channel_word_turns(channel, channel_index)
+    if word_turns:
+        return word_turns
+
+    transcript = _channel_transcript(channel)
+    if transcript is None:
+        return []
+    return [_MultichannelTurn(channel_index=channel_index, start=None, text=transcript)]
+
+
+def _channel_utterance_turns(
+    channel: dict[str, Any],
+    channel_index: int,
+) -> list[_MultichannelTurn]:
+    """Return utterance-level turns for one channel when Deepgram provides them."""
+
+    turns: list[_MultichannelTurn] = []
+    for utterance in _channel_utterance_items(channel):
+        transcript = _clean_transcript(utterance.get("transcript"))
+        if transcript is None:
+            continue
+        turns.append(
+            _MultichannelTurn(
+                channel_index=channel_index,
+                start=_seconds(utterance.get("start")),
+                text=transcript,
+            )
+        )
+    return turns
+
+
+def _channel_utterance_items(channel: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return channel-scoped utterance dictionaries from known Deepgram shapes."""
+
+    direct_utterances = channel.get("utterances")
+    if isinstance(direct_utterances, list):
+        return [utterance for utterance in direct_utterances if isinstance(utterance, dict)]
+
+    alternative = _first_channel_alternative(channel)
+    if alternative is None:
+        return []
+
+    alternative_utterances = alternative.get("utterances")
+    if not isinstance(alternative_utterances, list):
+        return []
+    return [utterance for utterance in alternative_utterances if isinstance(utterance, dict)]
+
+
+def _channel_word_turns(
+    channel: dict[str, Any],
+    channel_index: int,
+) -> list[_MultichannelTurn]:
+    """Group channel words into rough turns when explicit utterances are absent."""
+
+    words = _channel_words(channel)
+    if not words:
+        return []
+
+    turns: list[_MultichannelTurn] = []
+    current_words: list[str] = []
+    current_start: float | None = None
+    last_end: float | None = None
+
+    for word in words:
+        text = _word_text(word)
+        if text is None:
+            continue
+
+        start = _seconds(word.get("start"))
+        end = _seconds(word.get("end"))
+        if (
+            current_words
+            and start is not None
+            and last_end is not None
+            and start - last_end > _WORD_TURN_GAP_SECONDS
+        ):
+            turns.append(
+                _MultichannelTurn(
+                    channel_index=channel_index,
+                    start=current_start,
+                    text=" ".join(current_words),
+                )
+            )
+            current_words = []
+            current_start = None
+
+        if current_start is None:
+            current_start = start
+        current_words.append(text)
+        if end is not None:
+            last_end = end
+        elif start is not None:
+            last_end = start
+
+    if current_words:
+        turns.append(
+            _MultichannelTurn(
+                channel_index=channel_index,
+                start=current_start,
+                text=" ".join(current_words),
+            )
+        )
+
+    return turns
+
+
+def _channel_words(channel: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return word dictionaries from one Deepgram channel alternative."""
+
+    alternative = _first_channel_alternative(channel)
+    if alternative is None:
+        return []
+    words = alternative.get("words")
+    if not isinstance(words, list):
+        return []
+    return [word for word in words if isinstance(word, dict)]
+
+
+def _channel_transcript(channel: dict[str, Any]) -> str | None:
+    """Return a plain transcript from one Deepgram channel alternative."""
+
+    alternative = _first_channel_alternative(channel)
+    if alternative is None:
+        return None
+    return _clean_transcript(alternative.get("transcript"))
+
+
+def _first_channel_alternative(channel: dict[str, Any]) -> dict[str, Any] | None:
+    """Return the first Deepgram alternative for one channel."""
+
+    alternatives = channel.get("alternatives")
+    if not isinstance(alternatives, list) or not alternatives:
+        return None
+    first_alternative = alternatives[0]
+    return first_alternative if isinstance(first_alternative, dict) else None
+
+
+def _format_multichannel_turn_lines(turns: list[_MultichannelTurn]) -> list[str]:
+    """Return formatted transcript lines with Agent/Lead labels."""
+
+    active_channels = {turn.channel_index for turn in turns}
+    single_active_channel = len(active_channels) == 1
+
+    lines: list[str] = []
+    for turn in turns:
+        label = (
+            "Agent"
+            if single_active_channel
+            else _multichannel_speaker_label(turn.channel_index)
+        )
+        speaker_turn = f"[{label}]: {turn.text}"
+        timestamp = _format_timestamp(turn.start)
+        lines.append(f"{timestamp} {speaker_turn}" if timestamp else speaker_turn)
+    return lines
+
+
+def _multichannel_speaker_label(channel_index: int) -> str:
+    """Map PhoneBurner stereo channels to participant roles."""
+
+    if channel_index == 0:
+        return "Agent"
+    if channel_index == 1:
+        return "Lead"
+    return f"Channel {channel_index}"
+
+
+def _multichannel_turn_sort_key(turn: _MultichannelTurn) -> tuple[int, float, int]:
+    """Sort timestamped turns first, then untimed fallback turns by channel."""
+
+    if turn.start is None:
+        return (1, 0.0, turn.channel_index)
+    return (0, turn.start, turn.channel_index)
+
+
+def _channel_index(raw_channel: Any) -> int | None:
+    """Coerce Deepgram channel metadata into a zero-based channel index."""
+
+    if isinstance(raw_channel, bool):
+        return None
+    if isinstance(raw_channel, int) and raw_channel >= 0:
+        return raw_channel
+    if isinstance(raw_channel, str) and raw_channel.isdigit():
+        return int(raw_channel)
+    if isinstance(raw_channel, list) and raw_channel:
+        return _channel_index(raw_channel[0])
+    return None
+
+
+def _clean_transcript(raw_transcript: Any) -> str | None:
+    """Return stripped transcript text when present."""
+
+    if not isinstance(raw_transcript, str):
+        return None
+    transcript = raw_transcript.strip()
+    return transcript or None
+
+
+def _seconds(raw_seconds: Any) -> float | None:
+    """Coerce Deepgram second offsets into a valid non-negative float."""
+
+    if isinstance(raw_seconds, bool):
+        return None
+    if isinstance(raw_seconds, int | float):
+        seconds = float(raw_seconds)
+    elif isinstance(raw_seconds, str):
+        try:
+            seconds = float(raw_seconds)
+        except ValueError:
+            return None
+    else:
+        return None
+    return seconds if seconds >= 0 else None
 
 
 def _format_utterances(response_json: dict[str, Any]) -> list[str]:

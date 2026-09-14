@@ -10,9 +10,10 @@ class PassthroughAdapter(STTAdapter):
     supports_diarization = False
     supports_language_detection = False
 
-    async def transcribe(self, gcs_uri: str) -> str:
+    async def transcribe(self, gcs_uri: str, *, workspace: str | None = None) -> str:
         """Fetch a pre-existing `.txt` transcript beside the audio object in GCS."""
 
+        _ = workspace
         transcript_uri = _transcript_uri_for_audio(gcs_uri)
         if not await file_exists(transcript_uri):
             raise FileNotFoundError(f"Transcript not found at {transcript_uri}")

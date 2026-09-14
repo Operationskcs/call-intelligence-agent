@@ -25,5 +25,5 @@ async def transcribe(event: CallEvent) -> str:
     else:
         raise ValueError(f"Unsupported STT_PROVIDER: {settings.stt.provider}")
 
-    raw_transcript = await adapter.transcribe(event.gcs_audio_uri)
+    raw_transcript = await adapter.transcribe(event.gcs_audio_uri, workspace=event.workspace)
     return resolve_speaker_roles(raw_transcript, event)
