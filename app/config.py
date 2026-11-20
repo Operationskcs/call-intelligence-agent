@@ -5,7 +5,7 @@ development may use a `.env` file that follows `.env.example`.
 """
 
 from functools import lru_cache
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -85,6 +85,13 @@ class STTSettings(EnvSettings):
     """Speech-to-text provider settings."""
 
     deepgram_api_key: str = Field(default="", validation_alias="DEEPGRAM_API_KEY")
+    phoneburner_semantic_roles: bool = Field(default=False, validation_alias="PHONEBURNER_SEMANTIC_ROLES")
+    phoneburner_channel_roles: dict[
+        Annotated[str, Field(pattern=r"^(0|[1-9][0-9]*)$")], Literal["Agent", "Lead"]
+    ] = Field(
+        default_factory=dict,
+        validation_alias="PHONEBURNER_CHANNEL_ROLES",
+    )
     provider: Literal["deepgram", "google", "passthrough"] = Field(
         default="deepgram",
         validation_alias="STT_PROVIDER",
@@ -225,9 +232,7 @@ class Settings(EnvSettings):
             "audio_bucket": self.gcs.audio_bucket,
             "ringcentral_bucket_configured": bool(self.gcs.ringcentral_bucket),
             "webhook_secret_configured": bool(self.webhook.secret_token),
-            "ringcentral_webhook_url_configured": bool(
-                self.telephony.ringcentral.webhook_url
-            ),
+            "ringcentral_webhook_url_configured": bool(self.telephony.ringcentral.webhook_url),
             "stt_provider": self.stt.provider,
             "database_configured": bool(self.database.url),
             "review_queue_configured": bool(self.pipeline.slack_review_queue_webhook_url),

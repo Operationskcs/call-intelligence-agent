@@ -44,6 +44,7 @@ def test_payload_omits_agent_name_and_truncates_phone_fields() -> None:
     )
 
     assert payload == {
+        "role_attribution": "phoneburner-evidence-v2",
         "call_id": "call-123",
         "lead_id": "lead-123",
         "workspace": "intake",
@@ -123,6 +124,7 @@ async def test_notify_dispatches_trigger_in_background_and_logs_success(
     assert captured["audience"] == "https://call-quality-trigger-znesczxkka-uc.a.run.app"
     assert captured["token"] == "signed-token"
     assert captured["json"] == {
+        "role_attribution": "phoneburner-evidence-v2",
         "call_id": "call-123",
         "lead_id": "lead-123",
         "workspace": "intake",

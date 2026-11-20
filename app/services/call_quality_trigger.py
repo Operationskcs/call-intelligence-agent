@@ -12,9 +12,10 @@ from google.auth.transport import requests as google_requests
 from google.oauth2 import id_token
 
 from app.config import get_settings
-from app.models.call_event import CallEvent
+from app.models.call_event import CallEvent, CallSource
 from app.models.match_result import MatchResult
 from app.models.note import ExtractedNote
+from app.services.phoneburner_roles import VERSION as PHONEBURNER_ROLE_VERSION
 
 logger = logging.getLogger(__name__)
 
@@ -119,6 +120,11 @@ def _payload(
         "call_id": event.call_id,
         "lead_id": match.crm_record_id,
         "workspace": match.workspace or event.workspace,
+        **(
+            {"role_attribution": PHONEBURNER_ROLE_VERSION}
+            if event.source is CallSource.PHONEBURNER and event.workspace == "intake"
+            else {}
+        ),
         "transcript": transcript,
         "summary": note.summary,
         "disposition": note.disposition,
