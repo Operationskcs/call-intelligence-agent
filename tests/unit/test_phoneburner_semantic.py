@@ -3,9 +3,10 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from app.adapters.stt.deepgram import _format_multichannel_transcript
 from app.models.call_event import CallEvent
 from app.services.phoneburner_roles import resolve_phoneburner_roles
-from app.services.phoneburner_semantic import refine
+from app.services.phoneburner_semantic import _read_vote, refine
 
 RAW = (
     "00:01 [Speaker 7]: Our team handles new client applications.\n"
@@ -60,9 +61,14 @@ def reply(body: str) -> dict:
         "unknown",
         "reported",
         "twice",
+        "provider",
     ],
 )
-async def test_semantic_boundary(mock_call_event: CallEvent, fault: str) -> None:
+@pytest.mark.parametrize("fenced", [False, True])
+async def test_semantic_boundary(
+    mock_call_event: CallEvent, fault: str, fenced: bool, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level("INFO", logger="app.services.phoneburner_semantic")
     raw = RAW.replace("My vehicle", "You said my vehicle") if fault == "reported" else RAW
     base = resolve_phoneburner_roles(raw, mock_call_event)
     assert set(base.roles.values()) == {"Unknown"}
@@ -75,6 +81,8 @@ async def test_semantic_boundary(mock_call_event: CallEvent, fault: str) -> None
         row = res["tracks"][1]
         if fault == "timeout":
             raise TimeoutError()
+        if fault == "provider":
+            raise RuntimeError("private provider response with customer details")
         if fault == "bad_quote":
             row["evidence"][0]["quote"] = "This quote was never said"
         if fault == "wrong_track":
@@ -88,7 +96,8 @@ async def test_semantic_boundary(mock_call_event: CallEvent, fault: str) -> None
             res["tracks"].pop()
         if fault == "unknown" or (fault == "disagree" and len(bodies) == 2):
             row["role"] = "Unknown"
-        return "not json" if fault == "bad_json" else json.dumps(res)
+        text = "not json" if fault == "bad_json" else json.dumps(res)
+        return f"```json\n{text}\n```" if fenced else text
 
     result = await refine(raw, base, ask)
     if fault == "none":
@@ -100,6 +109,40 @@ async def test_semantic_boundary(mock_call_event: CallEvent, fault: str) -> None
         )
     else:
         assert result == base.transcript
+    reasons = {
+        "bad_quote": "unverifiable_quote", "wrong_track": "wrong_track",
+        "repeated_turn": "non_independent_evidence", "disagree": "model_abstained",
+        "bad_json": "invalid_vote_json", "timeout": "timeout",
+        "one_track": "invalid_track_count", "unknown": "model_abstained",
+        "reported": "reported_speech", "twice": "non_independent_evidence",
+        "provider": "provider_error",
+    }
+    vote = 2 if fault == "disagree" else 1
+    rejected = [r.getMessage() for r in caplog.records
+                if r.name == "app.services.phoneburner_semantic"
+                and r.getMessage().startswith("semantic_vote_rejected")]
+    assert rejected == ([] if fault == "none" else [
+        f"semantic_vote_rejected vote={vote} reason={reasons[fault]}"
+    ])
+    assert "private provider response" not in caplog.text
+    if fault != "none":
+        assert len(bodies) == vote
+
+
+@pytest.mark.parametrize("header", ["```", "```json", "```JSON"])
+def test_single_fence_crlf(header: str) -> None:
+    assert _read_vote(f' \r\n{header}\r\n{{"tracks":[]}}\r\n```\r\n') == {"tracks": []}
+
+
+@pytest.mark.parametrize("text", [
+    'Here is the JSON:\n```json\n{}\n```', '```json\n{}\n```\nDone.',
+    '```json\n{}\n```\n```json\n{}\n```', '```json\n{}', '```python\n{}\n```',
+    '{} {}', '```json\n{} {}\n```', '```json\n[]\n```', '{"tracks":[{"id":"A","id":"B"}]}',
+    '{"tracks":[],"score":NaN}',
+])
+def test_ambiguous_or_non_json_vote_rejected(text: str) -> None:
+    with pytest.raises(ValueError):
+        _read_vote(text)
 
 
 @pytest.mark.parametrize(
@@ -118,3 +161,82 @@ async def test_noneligible_inputs_do_not_invoke_model(mock_call_event: CallEvent
     ask = AsyncMock()
     assert await refine(raw, base, ask) == base.transcript
     ask.assert_not_called()
+
+
+@pytest.mark.parametrize(("handoff", "new_segment"), [
+    ("One moment please.", "I have the paperwork right here."),  # diarizer split
+    ("Let me put my daughter on the phone.", "I am her daughter."),  # third party
+    ("Le paso a mi hija.", "Soy su hija, mi madre está aquí."),  # third party, ES
+])
+async def test_same_channel_return_is_not_proof_of_a_single_voice(
+    mock_call_event: CallEvent, handoff: str, new_segment: str
+) -> None:
+    # Identical channel/speaker sequence and timing in every case. Even a return to
+    # the original speaker after a short segment does not establish who said it.
+    observations = [
+        (0, 0, "I am calling from the law firm."),
+        (1, 0, "My car was hit."),
+        (1, 0, handoff),
+        (1, 1, new_segment),
+        (1, 0, "Thanks, I am back."),
+    ]
+    raw = _format_multichannel_transcript({"results": {
+        "channels": [{}, {}],
+        "utterances": [
+            {"channel": ch, "speaker": sp, "start": 4*i, "transcript": text}
+            for i, (ch, sp, text) in enumerate(observations)
+        ],
+    }})
+    base = resolve_phoneburner_roles(raw, mock_call_event)
+    assert base.roles == {
+        "Channel 0 Speaker 0": "Agent",
+        "Channel 1 Speaker 0": "Lead",
+        "Channel 1 Speaker 1": "Unknown",
+    }
+    ask = AsyncMock()
+    assert await refine(raw, base, ask) == base.transcript
+    assert f"[Unknown (Channel 1 Speaker 1)]: {new_segment}" in base.transcript
+    ask.assert_not_called()
+
+
+async def test_two_parseable_but_opposing_votes_abstain(
+    mock_call_event: CallEvent, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level("INFO", logger="app.services.phoneburner_semantic")
+    # Both speakers describe personal and intake experience: shape-valid votes
+    # can disagree even when every quoted excerpt is exact and on the right track.
+    raw = (
+        "[Speaker 1]: Our office reviews new applications.\n"
+        "[Speaker 2]: Our office reviews incoming applications.\n"
+        "[Speaker 1]: I completed my insurance claim yesterday.\n"
+        "[Speaker 2]: I completed my insurance claim today.\n"
+        "[Speaker 1]: What date did this collision occur on?\n"
+        "[Speaker 2]: What date did this collision take place?\n"
+        "[Speaker 1]: My vehicle spun around twice.\n"
+        "[Speaker 2]: My vehicle spun around once."
+    )
+    base = resolve_phoneburner_roles(raw, mock_call_event)
+    assert set(base.roles.values()) == {"Unknown"}
+    calls = []
+
+    async def ask(body: str) -> str:
+        prompt = json.loads(body)
+        calls.append(prompt["order"])
+        # A and X are *opposite* original tracks under the two alias mappings.
+        agent, lead = prompt["tracks"]
+        rows = []
+        for track, role, specs in [
+            (agent, "Agent", [("Our office", "firm_process"), ("What date", "intake_discovery")]),
+            (lead, "Lead", [("I completed", "own_claim"), ("My vehicle", "own_accident")]),
+        ]:
+            evidence = []
+            for prefix, kind in specs:
+                turn = next(t for t in prompt["turns"]
+                            if t["track"] == track and t["speech"].startswith(prefix))
+                evidence.append({"turn": turn["id"], "kind": kind, "quote": turn["speech"]})
+            rows.append({"id": track, "role": role, "evidence": evidence})
+        return "```json\n" + json.dumps({"tracks": rows}) + "\n```"
+
+    assert await refine(raw, base, ask) == base.transcript
+    assert calls == ["chronological", "grouped by speaker"]
+    assert "semantic_vote_rejected vote=2 reason=votes_disagree" in caplog.text

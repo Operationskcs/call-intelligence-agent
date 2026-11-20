@@ -69,3 +69,31 @@ with different aliases, two distinct verbatim evidence turns and kinds for
 each participant, plus compatibility with already-grounded roles. A timeout,
 malformed result, uncertainty or disagreement leaves the original abstention.
 Disable the flag to roll back this pass without changing deterministic rules.
+
+### Vote envelope and multi-voice recordings
+
+The vote reader accepts one JSON object, either bare or within one standalone
+Markdown code fence (unlabelled or labelled `json`). It does not extract JSON
+from surrounding prose, repair truncated objects, or select among multiple
+objects or duplicate keys. Removing the fence is a transport-format change:
+both votes must still independently pass the same exact-quote, turn, track
+and evidence-kind checks and agree with each other and any established role.
+
+If an eligible vote is rejected, the service emits one diagnostic such as
+`semantic_vote_rejected vote=1 reason=unverifiable_quote`. The number is the
+failed vote (1 or 2); the reason is the first failed check, not a manager
+judgment. Model abstention, malformed JSON, non-independent evidence, role
+conflict, disagreement, timeout and provider errors are distinguished. This
+event contains no transcript, quotation, model reply, call ID or contact data.
+Ineligible calls do not vote or emit a vote-rejection event.
+
+A diarization ID identifies a segment group, not necessarily a person. Even
+on one physical channel an A–B–A sequence could be one person split into two
+IDs or a second person briefly speaking on the same phone. Turn length,
+absence of overlap, similar words and the existing CRM role are not proof.
+A handoff followed by a distinct introduction is a useful place to inspect
+the recording, not an instruction to join or relabel tracks. To adjudicate a
+case, align the disputed turns with independent, time-bounded participant
+or isolated-source evidence; a call-level contact or participant count is
+not enough. Without that evidence, preserve the tracks and any unresolved
+role. The two-party semantic fallback must not run on a three-ID transcript.
