@@ -1,6 +1,7 @@
 """Deepgram speech-to-text adapter."""
 
 import math
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, cast
@@ -250,13 +251,18 @@ def _utterance_turns(
         speakers = {_channel_index(w.get("speaker")) for w, token in tokens if token}
         if speakers - {None}:
             rebuilt = " ".join(token for _, token in tokens if token)
+            if len(tokens) != len(words) or not all(token for _, token in tokens):
+                return [_MultichannelTurn(channel, start, transcript, unattributed=True)]
             if len(speakers) == 1 and summary is not None and summary not in speakers:
                 return [_MultichannelTurn(channel, start, transcript, unattributed=True)]
-            if rebuilt == transcript and all(token for _, token in tokens):
+            if rebuilt == transcript:
                 return _group_channel_words([w for w, _ in tokens], channel, start)
-            # If word tokens omit punctuation or content, retain the exact
-            # source quote. Attribute only when both levels are consistent.
-            if len(speakers) != 1 or (summary is not None and summary not in speakers):
+            # Formatting may differ. A label for only part of the wording
+            # cannot vouch for an entire quote, even if all labels agree.
+            lexemes = re.findall(r"\w+", transcript.casefold())
+            if (not lexemes or lexemes != re.findall(r"\w+", rebuilt.casefold())
+                    or len(speakers) != 1
+                    or (summary is not None and summary not in speakers)):
                 return [_MultichannelTurn(channel, start, transcript, unattributed=True)]
             summary = next(iter(speakers))
     return [_MultichannelTurn(channel, start, transcript, summary)]
