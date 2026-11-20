@@ -66,6 +66,37 @@ def _sample(raw: str, base: RoleResolution) -> list[_Entry]:
     return turns
 
 
+def _unique_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    obj: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in obj:
+            raise ValueError("Duplicate key in semantic vote")
+        obj[key] = value
+    return obj
+
+
+def _invalid_constant(_: str) -> None:
+    raise ValueError("Non-JSON constant in semantic vote")
+
+
+def _read_vote(text: str) -> dict[str, Any]:
+    """Accept one JSON object, optionally inside one standalone Markdown fence."""
+    text = text.strip(" \t\r\n")
+    if text.startswith("```"):
+        lines = text.split("\n")
+        if (
+            len(lines) < 3
+            or lines[0].rstrip(" \t\r").lower() not in {"```json", "```"}
+            or lines[-1] != "```"
+        ):
+            raise ValueError("Invalid semantic vote envelope")
+        text = "\n".join(lines[1:-1])
+    obj = json.loads(text, object_pairs_hook=_unique_keys, parse_constant=_invalid_constant)
+    if not isinstance(obj, dict):
+        raise ValueError("Semantic vote must be an object")
+    return obj
+
+
 async def _vote(
     turns: list[_Entry], tracks: list[str], reverse: bool, ask: Request
 ) -> dict[str, str]:
@@ -75,7 +106,7 @@ async def _vote(
     if reverse:
         turns = sorted(turns, key=lambda t: t.track == turns[0].track)
     body = [{"id": i, "track": aliases[t.track], "speech": t.text} for i, t in enumerate(turns)]
-    data = json.loads(
+    data = _read_vote(
         await ask(
             json.dumps(
                 {
@@ -87,7 +118,7 @@ async def _vote(
             )
         )
     )
-    rows = data.get("tracks") if isinstance(data, dict) else None
+    rows = data.get("tracks")
     if not isinstance(rows, list) or len(rows) != 2:
         return {}
     result: dict[str, str] = {}
