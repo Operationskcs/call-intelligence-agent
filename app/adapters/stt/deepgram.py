@@ -1,5 +1,6 @@
 """Deepgram speech-to-text adapter."""
 
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, cast
@@ -25,6 +26,8 @@ class _MultichannelTurn:
     channel_index: int
     start: float | None
     text: str
+    speaker_index: int | None = None
+    unattributed: bool = False
 
 
 class DeepgramAdapter(STTAdapter):
@@ -77,7 +80,7 @@ def _transcription_options_for_workspace(workspace: str | None) -> dict[str, boo
         options.update(
             {
                 "multichannel": True,
-                "diarize": False,
+                "diarize": True,
                 "punctuate": True,
             }
         )
@@ -88,7 +91,7 @@ def _transcription_options_for_workspace(workspace: str | None) -> dict[str, boo
 
 
 def _uses_multichannel_transcription(workspace: str | None) -> bool:
-    """Return True for Intake calls, whose PhoneBurner recordings are stereo by speaker."""
+    """Request physical channels for Intake; layout is not proof of participant roles."""
 
     return isinstance(workspace, str) and workspace.strip().lower() == "intake"
 
@@ -147,11 +150,12 @@ def _format_deepgram_transcript(response_json: dict[str, Any]) -> str:
 
 
 def _format_multichannel_transcript(response_json: dict[str, Any]) -> str:
-    """Format Deepgram multichannel output into Agent/Lead transcript text."""
+    """Format multichannel output without assuming participant roles."""
 
     turns = _multichannel_turns(response_json)
     if turns:
-        return "\n".join(_format_multichannel_turn_lines(turns))
+        mono = len(response_json["results"]["channels"]) == 1
+        return "\n".join(_format_multichannel_turn_lines(turns, mono=mono))
 
     raise ValueError("Deepgram response did not include a transcript.")
 
@@ -164,12 +168,10 @@ def _multichannel_turns(response_json: dict[str, Any]) -> list[_MultichannelTurn
         return []
 
     root_utterance_turns = _root_multichannel_utterance_turns(response_json)
-    if root_utterance_turns:
-        return sorted(root_utterance_turns, key=_multichannel_turn_sort_key)
-
-    turns: list[_MultichannelTurn] = []
+    turns: list[_MultichannelTurn] = list(root_utterance_turns)
+    represented_channels = {turn.channel_index for turn in root_utterance_turns}
     for channel_index, channel in enumerate(channels):
-        if not isinstance(channel, dict):
+        if not isinstance(channel, dict) or channel_index in represented_channels:
             continue
         turns.extend(_channel_turns(channel, channel_index))
 
@@ -189,19 +191,17 @@ def _root_multichannel_utterance_turns(
     for utterance in utterances:
         if not isinstance(utterance, dict):
             continue
-        channel_index = _channel_index(utterance.get("channel"))
-        if channel_index is None:
+        channels = response_json["results"]["channels"]
+        raw_channel = utterance.get("channel")
+        channel_index = 0 if raw_channel is None and len(channels) == 1 else _channel_index(
+            raw_channel
+        )
+        if channel_index is None or channel_index >= len(channels):
             continue
         transcript = _clean_transcript(utterance.get("transcript"))
         if transcript is None:
             continue
-        turns.append(
-            _MultichannelTurn(
-                channel_index=channel_index,
-                start=_seconds(utterance.get("start")),
-                text=transcript,
-            )
-        )
+        turns.extend(_utterance_turns(channel_index, utterance, transcript))
 
     return turns
 
@@ -234,14 +234,32 @@ def _channel_utterance_turns(
         transcript = _clean_transcript(utterance.get("transcript"))
         if transcript is None:
             continue
-        turns.append(
-            _MultichannelTurn(
-                channel_index=channel_index,
-                start=_seconds(utterance.get("start")),
-                text=transcript,
-            )
-        )
+        turns.extend(_utterance_turns(channel_index, utterance, transcript))
     return turns
+
+
+def _utterance_turns(
+    channel: int, utterance: dict[str, Any], transcript: str
+) -> list[_MultichannelTurn]:
+    """Do not attribute a multi-voice utterance to its summary speaker."""
+    start = _seconds(utterance.get("start"))
+    summary = _channel_index(utterance.get("speaker"))
+    words = utterance.get("words")
+    if isinstance(words, list):
+        tokens = [(w, _word_text(w)) for w in words if isinstance(w, dict)]
+        speakers = {_channel_index(w.get("speaker")) for w, token in tokens if token}
+        if speakers - {None}:
+            rebuilt = " ".join(token for _, token in tokens if token)
+            if len(speakers) == 1 and summary is not None and summary not in speakers:
+                return [_MultichannelTurn(channel, start, transcript, unattributed=True)]
+            if rebuilt == transcript and all(token for _, token in tokens):
+                return _group_channel_words([w for w, _ in tokens], channel, start)
+            # If word tokens omit punctuation or content, retain the exact
+            # source quote. Attribute only when both levels are consistent.
+            if len(speakers) != 1 or (summary is not None and summary not in speakers):
+                return [_MultichannelTurn(channel, start, transcript, unattributed=True)]
+            summary = next(iter(speakers))
+    return [_MultichannelTurn(channel, start, transcript, summary)]
 
 
 def _channel_utterance_items(channel: dict[str, Any]) -> list[dict[str, Any]]:
@@ -267,14 +285,19 @@ def _channel_word_turns(
 ) -> list[_MultichannelTurn]:
     """Group channel words into rough turns when explicit utterances are absent."""
 
-    words = _channel_words(channel)
-    if not words:
-        return []
+    return _group_channel_words(_channel_words(channel), channel_index)
+
+
+def _group_channel_words(
+    words: list[dict[str, Any]], channel_index: int, initial_start: float | None = None
+) -> list[_MultichannelTurn]:
 
     turns: list[_MultichannelTurn] = []
     current_words: list[str] = []
-    current_start: float | None = None
+    current_start: float | None = initial_start
     last_end: float | None = None
+    current_speaker: int | None = None
+    has_speaker_ids = any(_channel_index(w.get("speaker")) is not None for w in words)
 
     for word in words:
         text = _word_text(word)
@@ -283,17 +306,22 @@ def _channel_word_turns(
 
         start = _seconds(word.get("start"))
         end = _seconds(word.get("end"))
-        if (
-            current_words
-            and start is not None
-            and last_end is not None
-            and start - last_end > _WORD_TURN_GAP_SECONDS
+        speaker = _channel_index(word.get("speaker"))
+        if current_words and (
+            speaker != current_speaker
+            or (
+                start is not None
+                and last_end is not None
+                and start - last_end > _WORD_TURN_GAP_SECONDS
+            )
         ):
             turns.append(
                 _MultichannelTurn(
                     channel_index=channel_index,
                     start=current_start,
                     text=" ".join(current_words),
+                    speaker_index=current_speaker,
+                    unattributed=has_speaker_ids and current_speaker is None,
                 )
             )
             current_words = []
@@ -301,6 +329,7 @@ def _channel_word_turns(
 
         if current_start is None:
             current_start = start
+        current_speaker = speaker
         current_words.append(text)
         if end is not None:
             last_end = end
@@ -313,6 +342,8 @@ def _channel_word_turns(
                 channel_index=channel_index,
                 start=current_start,
                 text=" ".join(current_words),
+                speaker_index=current_speaker,
+                unattributed=has_speaker_ids and current_speaker is None,
             )
         )
 
@@ -350,33 +381,25 @@ def _first_channel_alternative(channel: dict[str, Any]) -> dict[str, Any] | None
     return first_alternative if isinstance(first_alternative, dict) else None
 
 
-def _format_multichannel_turn_lines(turns: list[_MultichannelTurn]) -> list[str]:
-    """Return formatted transcript lines with Agent/Lead labels."""
-
-    active_channels = {turn.channel_index for turn in turns}
-    single_active_channel = len(active_channels) == 1
+def _format_multichannel_turn_lines(turns: list[_MultichannelTurn], *, mono: bool) -> list[str]:
+    """Preserve acoustic identities; business roles require independent evidence."""
 
     lines: list[str] = []
+    active = {t.channel_index for t in turns}
     for turn in turns:
-        label = (
-            "Agent"
-            if single_active_channel
-            else _multichannel_speaker_label(turn.channel_index)
-        )
+        label = f"Channel {turn.channel_index}"
+        if turn.unattributed:
+            label = "Unknown"
+        elif mono:
+            label = _speaker_label(turn.speaker_index)
+        elif turn.speaker_index is not None:
+            label += f" Speaker {turn.speaker_index}"
+        elif len(active) == 1:
+            label = f"Unseparated {label}"
         speaker_turn = f"[{label}]: {turn.text}"
         timestamp = _format_timestamp(turn.start)
         lines.append(f"{timestamp} {speaker_turn}" if timestamp else speaker_turn)
     return lines
-
-
-def _multichannel_speaker_label(channel_index: int) -> str:
-    """Map PhoneBurner stereo channels to participant roles."""
-
-    if channel_index == 0:
-        return "Agent"
-    if channel_index == 1:
-        return "Lead"
-    return f"Channel {channel_index}"
 
 
 def _multichannel_turn_sort_key(turn: _MultichannelTurn) -> tuple[int, float, int]:
@@ -396,7 +419,7 @@ def _channel_index(raw_channel: Any) -> int | None:
         return raw_channel
     if isinstance(raw_channel, str) and raw_channel.isdigit():
         return int(raw_channel)
-    if isinstance(raw_channel, list) and raw_channel:
+    if isinstance(raw_channel, list) and len(raw_channel) == 1:
         return _channel_index(raw_channel[0])
     return None
 
@@ -424,7 +447,7 @@ def _seconds(raw_seconds: Any) -> float | None:
             return None
     else:
         return None
-    return seconds if seconds >= 0 else None
+    return seconds if math.isfinite(seconds) and seconds >= 0 else None
 
 
 def _format_utterances(response_json: dict[str, Any]) -> list[str]:
@@ -441,10 +464,7 @@ def _format_utterances(response_json: dict[str, Any]) -> list[str]:
         transcript = utterance.get("transcript")
         if not isinstance(transcript, str) or not transcript.strip():
             continue
-        speaker_turn = (
-            f"[{_speaker_label(utterance.get('speaker'))}]: "
-            f"{transcript.strip()}"
-        )
+        speaker_turn = f"[{_speaker_label(utterance.get('speaker'))}]: {transcript.strip()}"
         timestamp = _format_timestamp(utterance.get("start"))
         lines.append(f"{timestamp} {speaker_turn}" if timestamp else speaker_turn)
     return lines

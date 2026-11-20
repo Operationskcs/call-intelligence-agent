@@ -96,6 +96,11 @@ Eligible Intake calls must be connected, at least 30 seconds long, and include a
 - `RINGCENTRAL_CLIENT_ID`, `RINGCENTRAL_CLIENT_SECRET`, `RINGCENTRAL_JWT`, `RINGCENTRAL_ACCOUNT_ID`: RingCentral API credentials.
 - `DATABASE_URL`: Cloud SQL/PostgreSQL connection for `call_audit_log`.
 - `DEEPGRAM_API_KEY`: transcription provider credential.
+- `PHONEBURNER_CHANNEL_ROLES`: optional JSON mapping for a verified Intake stereo
+  layout. Default: `{}`. Do not enable a global mapping based on one recording.
+  See [PhoneBurner attribution and release checks](docs/phoneburner-attribution.md).
+- `PHONEBURNER_SEMANTIC_ROLES`: optional two-pass Vertex attribution on unresolved
+  two-party PhoneBurner transcripts. Off by default; never overrides conflicting evidence.
 - `INTAKE_CRM_BASE_URL`, `INTAKE_CRM_API_TOKEN`, `MEDHUB_CRM_BASE_URL`, `MEDHUB_CRM_API_TOKEN`, `GRS_CRM_BASE_URL`, `GRS_CRM_API_TOKEN`: CRM workspace configuration.
 - `CALL_QUALITY_TRIGGER_URL`: call-quality trigger endpoint notified after successful non-review CRM writes.
 

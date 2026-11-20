@@ -123,12 +123,11 @@ async def test_transcribe_uses_multichannel_options_for_intake(
         "detect_language": True,
         "utterances": True,
         "multichannel": True,
-        "diarize": False,
+        "diarize": True,
         "punctuate": True,
     }
     assert transcript == (
-        "00:00 [Agent]: Hola, Alejandro, estas?\n"
-        "00:02 [Lead]: Alo? Bien, buenos dias."
+        "00:00 [Channel 0]: Hola, Alejandro, estas?\n00:02 [Channel 1]: Alo? Bien, buenos dias."
     )
 
 
@@ -203,14 +202,14 @@ def test_format_multichannel_transcript_interleaves_two_active_channels() -> Non
     )
 
     assert transcript == (
-        "00:03 [Agent]: Hola, Alejandro, estas?\n"
-        "00:05 [Lead]: Alo? Bien, buenos dias.\n"
-        "00:08 [Agent]: El motivo de mi llamada es..."
+        "00:03 [Channel 0]: Hola, Alejandro, estas?\n"
+        "00:05 [Channel 1]: Alo? Bien, buenos dias.\n"
+        "00:08 [Channel 0]: El motivo de mi llamada es..."
     )
 
 
-def test_format_multichannel_transcript_labels_single_active_channel_as_agent() -> None:
-    """One-sided Intake calls should be treated as Agent-only outreach."""
+def test_format_multichannel_transcript_preserves_single_active_channel() -> None:
+    """One active audio channel is not proof that only the agent is speaking."""
 
     transcript = deepgram._format_multichannel_transcript(
         {
@@ -229,8 +228,8 @@ def test_format_multichannel_transcript_labels_single_active_channel_as_agent() 
     )
 
     assert transcript == (
-        "00:01 [Agent]: Hola, te llamo de la firma.\n"
-        "00:04 [Agent]: Solo queria dar seguimiento."
+        "00:01 [Unseparated Channel 0]: Hola, te llamo de la firma.\n"
+        "00:04 [Unseparated Channel 0]: Solo queria dar seguimiento."
     )
 
 
@@ -279,9 +278,7 @@ def test_format_multichannel_transcript_groups_channel_words_when_needed() -> No
     )
 
     assert transcript == (
-        "00:00 [Agent]: Hola, Alejandro.\n"
-        "00:01 [Lead]: Alo?\n"
-        "00:03 [Agent]: Seguimos."
+        "00:00 [Channel 0]: Hola, Alejandro.\n00:01 [Channel 1]: Alo?\n00:03 [Channel 0]: Seguimos."
     )
 
 
@@ -339,3 +336,66 @@ def test_format_deepgram_transcript_preserves_single_speaker_id() -> None:
     )
 
     assert transcript == "00:00 [Speaker 1]: hello\n00:04 [Speaker 1]: following up"
+
+
+def test_mono_channel_preserves_multiple_diarized_speakers() -> None:
+    transcript = deepgram._format_multichannel_transcript(
+        {
+            "results": {
+                "channels": [
+                    {
+                        "alternatives": [
+                            {
+                                "words": [
+                                    {"start": 0, "end": 1, "speaker": 1, "word": "Hello."},
+                                    {"start": 1.1, "end": 2, "speaker": 0, "word": "Hi."},
+                                ]
+                            }
+                        ]
+                    }
+                ],
+            }
+        }
+    )
+    assert transcript == "00:00 [Speaker 1]: Hello.\n00:01 [Speaker 0]: Hi."
+
+
+def test_speaker_ids_are_scoped_to_audio_channel() -> None:
+    transcript = deepgram._format_multichannel_transcript(
+        {
+            "results": {
+                "channels": [{}, {}],
+                "utterances": [
+                    {"channel": 0, "speaker": 0, "start": 0, "transcript": "One."},
+                    {"channel": 1, "speaker": 0, "start": 1, "transcript": "Two."},
+                ],
+            }
+        }
+    )
+    assert transcript == "00:00 [Channel 0 Speaker 0]: One.\n00:01 [Channel 1 Speaker 0]: Two."
+
+
+def test_partial_root_utterances_do_not_drop_other_channels() -> None:
+    transcript = deepgram._format_multichannel_transcript(
+        {
+            "results": {
+                "channels": [{}, {"utterances": [{"start": 1, "transcript": "Two."}]}],
+                "utterances": [{"channel": 0, "start": 0, "transcript": "One."}],
+            }
+        }
+    )
+    assert transcript == "00:00 [Channel 0]: One.\n00:01 [Channel 1]: Two."
+
+
+@pytest.mark.parametrize("offset", [float("inf"), float("nan"), -1, True])
+def test_invalid_offsets_do_not_crash_multichannel_formatting(offset: object) -> None:
+    assert (
+        deepgram._format_multichannel_transcript(
+            {
+                "results": {
+                    "channels": [{"utterances": [{"start": offset, "transcript": "Hello."}]}],
+                }
+            }
+        )
+        == "[Unknown]: Hello."
+    )
