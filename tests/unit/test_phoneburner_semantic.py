@@ -61,10 +61,14 @@ def reply(body: str) -> dict:
         "unknown",
         "reported",
         "twice",
+        "provider",
     ],
 )
 @pytest.mark.parametrize("fenced", [False, True])
-async def test_semantic_boundary(mock_call_event: CallEvent, fault: str, fenced: bool) -> None:
+async def test_semantic_boundary(
+    mock_call_event: CallEvent, fault: str, fenced: bool, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level("INFO", logger="app.services.phoneburner_semantic")
     raw = RAW.replace("My vehicle", "You said my vehicle") if fault == "reported" else RAW
     base = resolve_phoneburner_roles(raw, mock_call_event)
     assert set(base.roles.values()) == {"Unknown"}
@@ -77,6 +81,8 @@ async def test_semantic_boundary(mock_call_event: CallEvent, fault: str, fenced:
         row = res["tracks"][1]
         if fault == "timeout":
             raise TimeoutError()
+        if fault == "provider":
+            raise RuntimeError("private provider response with customer details")
         if fault == "bad_quote":
             row["evidence"][0]["quote"] = "This quote was never said"
         if fault == "wrong_track":
@@ -103,6 +109,24 @@ async def test_semantic_boundary(mock_call_event: CallEvent, fault: str, fenced:
         )
     else:
         assert result == base.transcript
+    reasons = {
+        "bad_quote": "unverifiable_quote", "wrong_track": "wrong_track",
+        "repeated_turn": "non_independent_evidence", "disagree": "model_abstained",
+        "bad_json": "invalid_vote_json", "timeout": "timeout",
+        "one_track": "invalid_track_count", "unknown": "model_abstained",
+        "reported": "reported_speech", "twice": "non_independent_evidence",
+        "provider": "provider_error",
+    }
+    vote = 2 if fault == "disagree" else 1
+    rejected = [r.getMessage() for r in caplog.records
+                if r.name == "app.services.phoneburner_semantic"
+                and r.getMessage().startswith("semantic_vote_rejected")]
+    assert rejected == ([] if fault == "none" else [
+        f"semantic_vote_rejected vote={vote} reason={reasons[fault]}"
+    ])
+    assert "private provider response" not in caplog.text
+    if fault != "none":
+        assert len(bodies) == vote
 
 
 @pytest.mark.parametrize("header", ["```", "```json", "```JSON"])
@@ -175,7 +199,10 @@ async def test_same_channel_return_is_not_proof_of_a_single_voice(
     ask.assert_not_called()
 
 
-async def test_two_parseable_but_opposing_votes_abstain(mock_call_event: CallEvent) -> None:
+async def test_two_parseable_but_opposing_votes_abstain(
+    mock_call_event: CallEvent, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level("INFO", logger="app.services.phoneburner_semantic")
     # Both speakers describe personal and intake experience: shape-valid votes
     # can disagree even when every quoted excerpt is exact and on the right track.
     raw = (
@@ -212,3 +239,4 @@ async def test_two_parseable_but_opposing_votes_abstain(mock_call_event: CallEve
 
     assert await refine(raw, base, ask) == base.transcript
     assert calls == ["chronological", "grouped by speaker"]
+    assert "semantic_vote_rejected vote=2 reason=votes_disagree" in caplog.text

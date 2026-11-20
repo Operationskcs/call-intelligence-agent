@@ -8,7 +8,7 @@ import logging
 import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, LiteralString
 
 from app.services.phoneburner_roles import RoleResolution, _REPORTED, _TURN, _normalize
 
@@ -97,6 +97,14 @@ def _read_vote(text: str) -> dict[str, Any]:
     return obj
 
 
+class _RejectedVote(Exception):
+    """Only developer-supplied reason codes may reach operational logs."""
+
+    def __init__(self, reason: LiteralString) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
 async def _vote(
     turns: list[_Entry], tracks: list[str], reverse: bool, ask: Request
 ) -> dict[str, str]:
@@ -106,67 +114,74 @@ async def _vote(
     if reverse:
         turns = sorted(turns, key=lambda t: t.track == turns[0].track)
     body = [{"id": i, "track": aliases[t.track], "speech": t.text} for i, t in enumerate(turns)]
-    data = _read_vote(
-        await ask(
-            json.dumps(
-                {
-                    "tracks": sorted(aliases.values()),
-                    "turns": body,
-                    "order": "grouped by speaker" if reverse else "chronological",
-                },
-                ensure_ascii=False,
-            )
-        )
-    )
+    request = json.dumps({
+        "tracks": sorted(aliases.values()), "turns": body,
+        "order": "grouped by speaker" if reverse else "chronological",
+    }, ensure_ascii=False)
+    try:
+        text = await ask(request)
+    except TimeoutError:
+        raise
+    except Exception:
+        raise _RejectedVote("provider_error") from None
+    try:
+        data = _read_vote(text)
+    except (ValueError, TypeError, RecursionError):
+        raise _RejectedVote("invalid_vote_json") from None
     rows = data.get("tracks")
     if not isinstance(rows, list) or len(rows) != 2:
-        return {}
+        raise _RejectedVote("invalid_track_count")
     result: dict[str, str] = {}
     inverse = {v: k for k, v in aliases.items()}
     for row in rows:
         if not isinstance(row, dict):
-            return {}
+            raise _RejectedVote("invalid_track")
         alias, role = row.get("id"), row.get("role")
-        if alias not in inverse or inverse[alias] in result or role not in _TYPES:
-            return {}
+        if not isinstance(alias, str) or alias not in inverse or inverse[alias] in result:
+            raise _RejectedVote("invalid_track")
+        if role == "Unknown":
+            raise _RejectedVote("model_abstained")
+        if not isinstance(role, str) or role not in _TYPES:
+            raise _RejectedVote("invalid_role")
         evidence = row.get("evidence")
         if not isinstance(evidence, list) or not 2 <= len(evidence) <= 4:
-            return {}
+            raise _RejectedVote("invalid_evidence_count")
         ids, kinds, excerpts = set(), set(), set()
         for x in evidence:
             if not isinstance(x, dict):
-                return {}
+                raise _RejectedVote("invalid_evidence")
             i, kind, quote = x.get("turn"), x.get("kind"), x.get("quote")
-            if (
-                type(i) is not int
-                or not 0 <= i < len(turns)
-                or turns[i].track != inverse[alias]
-                or kind not in _TYPES[role]
-                or not isinstance(quote, str)
-                or len(quote.split()) < 4
-                or quote not in turns[i].text
-                or "[redacted]" in quote
-            ):
-                return {}
+            if type(i) is not int or not 0 <= i < len(turns):
+                raise _RejectedVote("invalid_turn")
+            if turns[i].track != inverse[alias]:
+                raise _RejectedVote("wrong_track")
+            if not isinstance(kind, str) or kind not in _TYPES[role]:
+                raise _RejectedVote("invalid_evidence_kind")
+            if not isinstance(quote, str) or len(quote.split()) < 4:
+                raise _RejectedVote("insufficient_quote")
+            if quote not in turns[i].text or "[redacted]" in quote:
+                raise _RejectedVote("unverifiable_quote")
             source = turns[i].text
             if _REPORTED.search(_normalize(source)) or any(c in source for c in '"“”«»'):
-                return {}
+                raise _RejectedVote("reported_speech")
             if kind != "intake_discovery" and ("?" in source or "¿" in source):
-                return {}
+                raise _RejectedVote("question_not_evidence")
             if role == "Lead" and not re.search(
                 r"\b(i|my|me|we|our|mi|mis|yo|fui|tengo|estoy|tuve|senti|sufri)\b",
                 _normalize(quote),
             ):
-                return {}
+                raise _RejectedVote("missing_first_person_evidence")
             ids.add(i)
             kinds.add(kind)
             excerpts.add(" ".join(quote.casefold().split()))
         if min(len(ids), len(kinds), len(excerpts)) < 2:
-            return {}
+            raise _RejectedVote("non_independent_evidence")
         if role == "Agent" and not kinds.intersection({"professional_intro", "firm_process"}):
-            return {}
+            raise _RejectedVote("missing_professional_evidence")
         result[inverse[alias]] = role
-    return result if set(result.values()) == {"Agent", "Lead"} else {}
+    if set(result.values()) != {"Agent", "Lead"}:
+        raise _RejectedVote("incomplete_role_pair")
+    return result
 
 
 async def refine(raw: str, base: RoleResolution, ask: Request) -> str:
@@ -174,17 +189,25 @@ async def refine(raw: str, base: RoleResolution, ask: Request) -> str:
     if not turns:
         return base.transcript
     tracks = sorted(base.roles)
+    vote = 1
     try:
         # Separate requests; neither sees the other response or the CRM labels.
         async with asyncio.timeout(40):
             a = await _vote(turns, tracks, False, ask)
-            if not a or any(v != "Unknown" and a[k] != v for k, v in base.roles.items()):
-                return base.transcript
+            if any(v != "Unknown" and a[k] != v for k, v in base.roles.items()):
+                raise _RejectedVote("established_role_conflict")
+            vote = 2
             b = await _vote(turns, tracks, True, ask)
         if a != b:
-            return base.transcript
-    except Exception as exc:
-        logger.warning("semantic_roles abstained error_type=%s", type(exc).__name__)
+            raise _RejectedVote("votes_disagree")
+    except _RejectedVote as rejection:
+        logger.info("semantic_vote_rejected vote=%d reason=%s", vote, rejection.reason)
+        return base.transcript
+    except TimeoutError:
+        logger.warning("semantic_vote_rejected vote=%d reason=timeout", vote)
+        return base.transcript
+    except Exception:
+        logger.warning("semantic_vote_rejected vote=%d reason=validation_error", vote)
         return base.transcript
     lines = []
     for line in raw.splitlines(keepends=True):

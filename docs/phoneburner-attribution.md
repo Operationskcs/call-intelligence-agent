@@ -79,6 +79,14 @@ objects or duplicate keys. Removing the fence is a transport-format change:
 both votes must still independently pass the same exact-quote, turn, track
 and evidence-kind checks and agree with each other and any established role.
 
+If an eligible vote is rejected, the service emits one diagnostic such as
+`semantic_vote_rejected vote=1 reason=unverifiable_quote`. The number is the
+failed vote (1 or 2); the reason is the first failed check, not a manager
+judgment. Model abstention, malformed JSON, non-independent evidence, role
+conflict, disagreement, timeout and provider errors are distinguished. This
+event contains no transcript, quotation, model reply, call ID or contact data.
+Ineligible calls do not vote or emit a vote-rejection event.
+
 A diarization ID identifies a segment group, not necessarily a person. Even
 on one physical channel an A–B–A sequence could be one person split into two
 IDs or a second person briefly speaking on the same phone. Turn length,
