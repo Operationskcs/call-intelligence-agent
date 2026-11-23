@@ -18,7 +18,7 @@ from app.models.call_event import CallEvent
 logger = logging.getLogger(__name__)
 Role = Literal["Agent", "Lead"]
 VERSION = "phoneburner-evidence-v2"
-POLICY_REVISION = "guided-intro-2026-11-23"
+POLICY_REVISION = "guided-intro-clauses-2026-11-23"
 _TURN = re.compile(
     r"^(?P<prefix>(?:\d+:\d{2}(?::\d{2})?\s+)?)"
     r"\[(?P<label>[^\]]+)]:\s*(?P<text>.*)$"
@@ -104,6 +104,27 @@ _OWNERSHIP = re.compile(
     r"|(?:soy|sere) la persona que (?:te|le) (?:va a ayudar|ayudara)"
     r"|i(?:'ll| will) be (?:the (?:person|specialist) )?(?:helping|assisting) you)\b"
 )
+_FIRM_OUTREACH_PLURAL = re.compile(
+    r"\b(?:te|le) (?:estamos llamando|llamamos) (?:de parte|en nombre) "
+    r"de (?:los abogados|la firma de abogados)\b"
+)
+_ASSIST_ACCIDENT = re.compile(
+    r"\b(?:estamos (?:aqui para|interesad[oa]s en)|queremos) "
+    r"(?:ayudarte|ayudarle|asistirte|asistirle) (?:en el caso de|con) "
+    r"(?:tu|su) accidente\b"
+)
+# Strip only a *separate*, trailing courtesy question. Do not turn a question
+# containing the outreach words into a statement. Do not strip reporting or
+# quotation guards from the original turn.
+_COURTESY_TAIL = re.compile(
+    r"(?:[.!;]\s*¿?\s*|,\s*¿\s*|\s+¿\s*)"
+    r"(?:(?:como\s*[, ]+)?como (?:estas?|esta usted|te (?:encuentras|va)|"
+    r"se (?:siente|encuentra)|amanecio)(?: (?:hoy|el dia de hoy))?|"
+    r"me (?:escucha|escuchas)|how are you(?: (?:doing|today|doing today))?)\s*\?\s*$"
+)
+_FOLLOWUP_QUESTIONS = re.compile(
+    r"[.!]\s+(?:(?:¿como\b|how (?:are|have) you\b)[^.!?¿\n]{0,55}\?\s*){1,2}$"
+)
 _OUR_FIRM = re.compile(r"\b(?:nuestr[oa] (?:firma|bufete|equipo legal)|our (?:law firm|legal team))\b")
 _UNSAFE_INTRO = re.compile(
     r"\b(?:no|not|never|don't|didn't|wasn't|voicemail|automated|recorded|repeat|repite|"
@@ -139,16 +160,19 @@ def _guided_intros(transcript: str) -> set[str]:
         if not contiguous:
             window.clear()
         previous, previous_at = label, elapsed
+        statement = _COURTESY_TAIL.sub("", _FOLLOWUP_QUESTIONS.sub("", sentence))
         if (skip_continuation or elapsed > 90 or re.search(r"\bllamó\b", m["text"], re.I)
                 or _REPORTED.search(sentence) or _UNSAFE_INTRO.search(sentence)
-                or _NON_EMPLOYEE.search(sentence) or any(c in sentence for c in '?"¿“”«»')):
+                or _NON_EMPLOYEE.search(sentence) or any(c in sentence for c in '"“”«»')
+                or any(c in statement for c in "¿?")):
             window.clear()
             continue
         window = [(at, text) for at, text in window[-2:] if elapsed - at <= 25]
-        window.append((elapsed, sentence))
+        window.append((elapsed, statement))
         speech = " ".join(re.sub(r"[^a-z0-9' ]+", " ", text) for _, text in window)
         speech = " ".join(speech.split())
-        if (_CASE_HELP.search(speech) and (_OUTREACH.search(speech)
+        if ((_CASE_HELP.search(speech) or _ASSIST_ACCIDENT.search(speech))
+                and (_OUTREACH.search(speech) or _FIRM_OUTREACH_PLURAL.search(speech)
                 or (_OWNERSHIP.search(speech) and _OUR_FIRM.search(speech)))):
             found.add(label)
     # Echo or repeated introductions on different identities cannot establish

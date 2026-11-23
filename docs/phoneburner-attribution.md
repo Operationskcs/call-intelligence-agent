@@ -29,6 +29,10 @@ establishes who spoke.
   role is inherited by someone who only answers, or by a later new speaker.
   Repeated introductions on different identities, contradictory evidence,
   and unseparated speech do not qualify under this rule.
+- A separate courtesy question after a completed introduction does not erase
+  that introduction. The question itself supplies no role evidence. A firm
+  calling on behalf of its lawyers may also explain its assistance in the
+  next consecutive turn from the same acoustic identity.
 - Separate a mixed utterance by its word speakers when the words reproduce the
   transcript. If speaker evidence conflicts and the quote cannot be split reliably,
   keep the original quote as Unknown. Keep the recording timestamp where available.
