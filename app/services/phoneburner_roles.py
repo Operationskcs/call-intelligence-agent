@@ -18,7 +18,7 @@ from app.models.call_event import CallEvent
 logger = logging.getLogger(__name__)
 Role = Literal["Agent", "Lead"]
 VERSION = "phoneburner-evidence-v2"
-POLICY_REVISION = "guided-intro-clauses-2026-11-23"
+POLICY_REVISION = "speaker-bound-case-offer-2026-11-23"
 _TURN = re.compile(
     r"^(?P<prefix>(?:\d+:\d{2}(?::\d{2})?\s+)?)"
     r"\[(?P<label>[^\]]+)]:\s*(?P<text>.*)$"
@@ -113,6 +113,34 @@ _ASSIST_ACCIDENT = re.compile(
     r"(?:ayudarte|ayudarle|asistirte|asistirle) (?:en el caso de|con) "
     r"(?:tu|su) accidente\b"
 )
+_TEAM_IDENTITY = re.compile(
+    r"^(?:(?:si|claro|bueno|mire|ah|ok|okay|yes|well)[ ,.]+)*"
+    r"(?:nosotros somos (?:los abogados|el equipo legal)|"
+    r"we(?: are|'re) (?:the legal team|the attorneys))\b"
+)
+_EXTERNAL_TEAM = re.compile(
+    r"\b(?:otra (?:parte|firma|oficina)|parte contraria|aseguradora|other (?:party|firm)|"
+    r"opposing|insurance company|insurance carrier)\b"
+)
+_DIRECT_CASE_OFFER = re.compile(
+    r"\b(?:estamos (?:aqui para|interesados en)|queremos) "
+    r"(?:ayudarte|ayudarle) (?:en (?:el )?caso de|con) (?:tu|su) accidente\b"
+    r"|\bwe(?: are|'re) here to help you with your (?:accident|injury) (?:claim|case)\b"
+)
+# PhoneBurner sometimes receives a Portuguese introduction. Recognizing the
+# agent here does not change consumer language routing or intake eligibility.
+_PT_OUTREACH = re.compile(
+    r"\b(?:a gente (?:esta|ta) te ligando|estamos (?:te |lhe )?ligando|"
+    r"estou (?:te |lhe )?ligando) (?:de|da|em nome da) "
+    r"(?:(?:la |l[' ]?)?(?:ayuda|ajuda) latina|equipe juridica|equipe de advogados)\b"
+)
+_PT_OFFER = re.compile(
+    r"\bpara (?:te |lhe )?ajudar (?:voce |voce a lidar )?com (?:o )?seu acidente\b"
+)
+_PT_INDIRECT = re.compile(
+    r"\b(?:nao|nem|nunca|se|quando|disse|disseram|falou|mensagem|gravacao|"
+    r"exemplo|repetir|repita|citando|segundo|imagine)\b"
+)
 # Strip only a *separate*, trailing courtesy question. Do not turn a question
 # containing the outreach words into a statement. Do not strip reporting or
 # quotation guards from the original turn.
@@ -142,11 +170,15 @@ def _guided_intros(transcript: str) -> set[str]:
     previous = ""
     previous_at = -1
     quote_lead_in = False
+    # A caller's answer can separate two complete declarations from one
+    # acoustic identity. Never splice partial phrases across the interruption.
+    anchors: dict[str, dict[str, int]] = {}
     for line in transcript.splitlines():
         m = _TURN.fullmatch(line)
         if not m or not m["prefix"].strip() or not _IDENTITY.fullmatch(m["label"]):
             window.clear()
             previous = ""
+            anchors.clear()
             continue
         elapsed = 0
         for part in m["prefix"].split(":"):
@@ -155,7 +187,8 @@ def _guided_intros(transcript: str) -> set[str]:
         contiguous = label == previous and 0 <= elapsed - previous_at <= 15
         skip_continuation = contiguous and quote_lead_in
         quote_lead_in = bool(re.search(
-            r"\b(?:dijo|dijeron|decia|said|told me|the message was)\s*[:,.]?\s*$", sentence
+            r"\b(?:dijo|dijeron|decia|disse|disseram|falou|said|told me|the message was)"
+            r"\s*[:,.]?\s*$", sentence
         ))
         if not contiguous:
             window.clear()
@@ -166,12 +199,23 @@ def _guided_intros(transcript: str) -> set[str]:
                 or _NON_EMPLOYEE.search(sentence) or any(c in sentence for c in '"“”«»')
                 or any(c in statement for c in "¿?")):
             window.clear()
+            anchors.pop(label, None)
             continue
+        marks = anchors.setdefault(label, {})
+        if _TEAM_IDENTITY.search(statement) and not _EXTERNAL_TEAM.search(statement):
+            marks["team"] = elapsed
+        if _DIRECT_CASE_OFFER.search(statement):
+            marks["offer"] = elapsed
+        if ("team" in marks and "offer" in marks
+                and abs(marks["team"] - marks["offer"]) <= 40):
+            found.add(label)
         window = [(at, text) for at, text in window[-2:] if elapsed - at <= 25]
         window.append((elapsed, statement))
         speech = " ".join(re.sub(r"[^a-z0-9' ]+", " ", text) for _, text in window)
         speech = " ".join(speech.split())
-        if ((_CASE_HELP.search(speech) or _ASSIST_ACCIDENT.search(speech))
+        pt_intro = (_PT_OUTREACH.search(speech) and _PT_OFFER.search(speech)
+                    and not _PT_INDIRECT.search(speech))
+        if pt_intro or ((_CASE_HELP.search(speech) or _ASSIST_ACCIDENT.search(speech))
                 and (_OUTREACH.search(speech) or _FIRM_OUTREACH_PLURAL.search(speech)
                 or (_OWNERSHIP.search(speech) and _OUR_FIRM.search(speech)))):
             found.add(label)
