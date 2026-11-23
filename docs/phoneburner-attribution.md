@@ -20,6 +20,15 @@ establishes who spoke.
 - Use an independently verified channel mapping, explicit speaker metadata, or
   corroborating first-person language. Do not identify the other party by elimination.
   An insult alone, a greeting or a quoted example does not identify its speaker.
+- During the first 90 seconds of Intake calls, direct outreach on behalf of a
+  legal organization together with a commitment to assist the listener with
+  their case can establish the Intaker. The two cues may span up to three
+  consecutive fragments on the same acoustic identity (at most 25 seconds).
+  For example: “Te llamo de parte del equipo legal. Para ayudarte con tu
+  accidente.” The role follows that identity, not that entire channel. No
+  role is inherited by someone who only answers, or by a later new speaker.
+  Repeated introductions on different identities, contradictory evidence,
+  and unseparated speech do not qualify under this rule.
 - Separate a mixed utterance by its word speakers when the words reproduce the
   transcript. If speaker evidence conflicts and the quote cannot be split reliably,
   keep the original quote as Unknown. Keep the recording timestamp where available.
