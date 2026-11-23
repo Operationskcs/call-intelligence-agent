@@ -10,6 +10,7 @@ from deepgram import AsyncDeepgramClient
 from deepgram.core.api_error import ApiError
 
 from app.adapters.stt.base import STTAdapter
+from app.adapters.stt.audio_hints import Hint, recognition_hints
 from app.storage.gcs import download_bytes
 
 
@@ -41,10 +42,12 @@ class DeepgramAdapter(STTAdapter):
         """Initialize the adapter with a Deepgram API key."""
 
         self.api_key = api_key
+        self.intake_hints: tuple[Hint, ...] = ()
 
     async def transcribe(self, gcs_uri: str, *, workspace: str | None = None) -> str:
         """Download GCS audio bytes and transcribe them with Deepgram."""
 
+        self.intake_hints = ()
         if not self.api_key:
             raise RuntimeError("DEEPGRAM_API_KEY must be configured before transcription.")
 
@@ -65,6 +68,7 @@ class DeepgramAdapter(STTAdapter):
 
         response_json = _response_to_dict(response)
         if _uses_multichannel_transcription(workspace):
+            self.intake_hints = recognition_hints(response_json)
             return _format_multichannel_transcript(response_json)
         return _format_deepgram_transcript(response_json)
 

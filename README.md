@@ -115,6 +115,21 @@ the public model files by SHA-256. Ambiguity, overlapping voices, unavailable
 audio or a busy verifier cannot produce an automatic misconduct allegation.
 Neither historical recordings nor Call Quality decisions are rewritten.
 
+**Contextual Intake re-listening.** For PhoneBurner Intake, low word/speaker confidence,
+overlapping speech, rapid speaker changes, unknown voices and cues labelled as caller
+speech can select up to two timestamped windows. The local recognizer listens in the
+original language to both tracks, including surrounding context. Mono is usable for
+discovery, never for employee attribution. Newly heard or contradictory sensitive words
+can yield `needs_review`, never an invented transcript correction or an automatic
+allegation. Noise alone is not misconduct. The advisory pass has a 60-second deadline
+and shares a single decoder slot; logs contain counts/status, not alternate speech.
+
+A supported directly addressed insult can occur within conversational framing
+(e.g. “Mire, usted es un idiota, déjeme terminar”). To certify it, the full original
+Agent turn must be independently heard, in order, with isolation on each word.
+Quotations, reported speech, negation, uncertain identity and competing voices
+cannot qualify on a keyword match. The downstream proof format is unchanged.
+
 Before disabling Cloud Scheduler, validate:
 
 ```bash
