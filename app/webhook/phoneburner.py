@@ -182,8 +182,16 @@ def _phoneburner_agent_name(payload: Mapping[str, Any]) -> str | None:
         if name:
             return name
 
-    return (
+    flat_name = (
         _optional_str(payload.get("from_name"))
         or _optional_str(payload.get("agent_name"))
         or _optional_str(payload.get("agentName"))
     )
+    if flat_name:
+        return flat_name
+    agent = payload.get("agent")
+    if isinstance(agent, Mapping):
+        first, last = agent.get("first_name"), agent.get("last_name")
+        if isinstance(first, str) and isinstance(last, str) and first.strip() and last.strip():
+            return f"{first.strip()} {last.strip()}"
+    return None
