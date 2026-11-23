@@ -21,7 +21,7 @@ from app.storage.audit import (
     DEEPGRAM_NO_TRANSCRIPT_ERROR_MESSAGE,
 )
 from app.worker import pipeline
-from app.worker.steps.s1_ingest import poll_legacy_phoneburner_calls, poll_new_calls
+from app.worker.steps.s1_ingest import PartialPollRateLimit, poll_legacy_phoneburner_calls, poll_new_calls
 from app.worker.steps.s8_audit import log_result
 
 _LOG_LEVEL = logging.INFO
@@ -74,7 +74,13 @@ _CLOUD_SCHEDULER_API_BASE_URL = "https://cloudscheduler.googleapis.com/v1"
 async def process_polled_calls() -> None:
     """Poll BigQuery once and run the pipeline for each unprocessed call."""
 
-    events = await poll_new_calls()
+    try:
+        events = await poll_new_calls()
+    except PartialPollRateLimit as partial:
+        logger.warning("RingCentral call-log throttled; processing %d pending Intake event(s).",
+                       len(partial.events))
+        await _process_events(partial.events)
+        raise
     logger.info("BigQuery polling found %d unprocessed call(s).", len(events))
     await _process_events(events)
 

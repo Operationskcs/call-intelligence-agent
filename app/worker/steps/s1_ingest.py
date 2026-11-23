@@ -14,6 +14,8 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
+import httpx
+
 from app.adapters.telephony.ringcentral import RingCentralAdapter
 from app.config import get_settings
 from app.models.call_event import CallEvent, CallSource
@@ -35,6 +37,23 @@ _RINGCENTRAL_CONNECTED_RESULT = "Call connected"
 _RINGCENTRAL_MIN_CALL_DURATION_SECONDS = 15
 
 
+class PartialPollRateLimit(RuntimeError):
+    """The job must surface the provider failure after draining eligible Intake work."""
+
+    def __init__(self, events: list[CallEvent]) -> None:
+        super().__init__("RingCentral call-log throttled; PhoneBurner poll completed")
+        self.events = events
+
+
+async def _ringcentral_poll_result() -> tuple[list[CallEvent], httpx.HTTPStatusError | None]:
+    try:
+        return await _poll_ringcentral_api(), None
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code != 429 or not exc.request.url.path.endswith("/call-log"):
+            raise
+        return [], exc
+
+
 async def poll_new_calls() -> list[CallEvent]:
     """Legacy: poll call sources for recent connected calls and return unprocessed events."""
 
@@ -45,15 +64,20 @@ async def poll_new_calls() -> list[CallEvent]:
         logger.info("PhoneBurner polling disabled via config")
         phoneburner_poll = _poll_no_phoneburner_events()
 
-    phoneburner_events, ringcentral_events = await asyncio.gather(
+    phoneburner_events, (ringcentral_events, rate_limit) = await asyncio.gather(
         phoneburner_poll,
-        _poll_ringcentral_api(),
+        _ringcentral_poll_result(),
     )
 
+    if rate_limit and not phoneburner_events:
+        raise rate_limit
     events = [*phoneburner_events, *ringcentral_events]
     events = _dedupe_events_by_call_id(events)
     unprocessed_events = await _filter_unprocessed(events)
-    return _cap_unprocessed_batch(unprocessed_events)
+    batch = _cap_unprocessed_batch(unprocessed_events)
+    if rate_limit:
+        raise PartialPollRateLimit(batch) from rate_limit
+    return batch
 
 
 async def _poll_no_phoneburner_events() -> list[CallEvent]:
