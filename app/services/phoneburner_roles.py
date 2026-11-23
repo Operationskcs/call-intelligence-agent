@@ -18,7 +18,7 @@ from app.models.call_event import CallEvent
 logger = logging.getLogger(__name__)
 Role = Literal["Agent", "Lead"]
 VERSION = "phoneburner-evidence-v2"
-POLICY_REVISION = "context-2026-11-20"
+POLICY_REVISION = "guided-intro-2026-11-23"
 _TURN = re.compile(
     r"^(?P<prefix>(?:\d+:\d{2}(?::\d{2})?\s+)?)"
     r"\[(?P<label>[^\]]+)]:\s*(?P<text>.*)$"
@@ -74,6 +74,86 @@ _AFFILIATED_INTRO = re.compile(
 _INDIRECT_INTRO = re.compile(
     r"\b(?:no|nunca|cuando|segun|dice[n]?|dijo|dijeron|decia|mensaje|grabacion|ejemplo)\b"
 )
+
+# Direct outreach on behalf of a legal organization PLUS a commitment to assist
+# the listener with their matter. Neither a firm name nor "I can help" suffices.
+_OUTREACH = re.compile(
+    r"\b(?:(?:(?:te|le|lo|la) )?(?:llamo|(?:estoy|estamos) llamando|me comunico)"
+    r" (?:de parte (?:del?|de la)|desde|del?|en nombre (?:del?|de la))"
+    r"|(?:soy|mi nombre es|(?:te|le) habla) [a-z'-]+(?: [a-z'-]+){0,2} "
+    r"(?:de parte (?:del?|de la)|del?|de la)"
+    r"|(?:i(?:'m| am) (?:calling|reaching out)|we(?:'re| are) calling|this is [a-z'-]+)"
+    r" (?:from|with|on behalf of)) (?:the |our |la |nuestra |el )?" + _FIRM + r"\b"
+)
+_CASE_HELP = re.compile(
+    r"\b(?:para (?:ayudarte|ayudarle|ayudarlo|ayudarla|asistirte|asistirle|guiarte|guiarle)"
+    r"|(?:voy a|estoy aqui para) (?:ayudarte|ayudarle|asistirte|asistirle|guiarte|guiarle)"
+    r"|(?:soy|sere) (?:la persona |el asesor |la asesora )?encargad[oa] de "
+    r"(?:ayudarte|ayudarle|asistirte|asistirle|guiarte|guiarle)"
+    r"|(?:soy|sere) la persona que (?:te|le) (?:va a ayudar|ayudara))"
+    r" (?:con|en|durante|a traves de) (?:el|la|tu|su|todo el) "
+    r"(?:accidente|caso|reclamo|reclamacion|proceso)\b"
+    r"|\b(?:to (?:help|assist|guide) you|i(?:'ll| will) (?:be (?:helping|assisting)|help|assist) you"
+    r"|i(?:'m| am) (?:the (?:person|specialist) (?:assigned|here) to (?:help|assist) you)"
+    r"|i(?:'ll| will) be the (?:person|specialist) (?:helping|assisting) you)"
+    r" (?:with|through) (?:your|the|this) (?:accident|case|claim|intake|process)\b"
+)
+_OWNERSHIP = re.compile(
+    r"\b(?:(?:soy|sere) (?:la persona |el asesor |la asesora )?encargad[oa] de"
+    r"|i(?:'m| am) the (?:person|specialist) (?:assigned|here) to"
+    r"|(?:soy|sere) la persona que (?:te|le) (?:va a ayudar|ayudara)"
+    r"|i(?:'ll| will) be (?:the (?:person|specialist) )?(?:helping|assisting) you)\b"
+)
+_OUR_FIRM = re.compile(r"\b(?:nuestr[oa] (?:firma|bufete|equipo legal)|our (?:law firm|legal team))\b")
+_UNSAFE_INTRO = re.compile(
+    r"\b(?:no|not|never|don't|didn't|wasn't|voicemail|automated|recorded|repeat|repite|"
+    r"grabado|grabada|contestador|segun|dijo|dijeron|dice|dijiste|told|said|tells|"
+    r"asked|quoted|pretend|imagina|supongamos|suppose|if|si (?:te|le|yo|fuera)|"
+    r"me explicaron|me dijeron|she explained|he explained|when you say|you said|"
+    r"cuando dices|me repitio|mi (?:abogado|hermano|hermana)|my lawyer)\b"
+)
+
+
+def _guided_intros(transcript: str) -> set[str]:
+    """Use only opening evidence, then follow that acoustic identity in the resolver."""
+    found: set[str] = set()
+    window: list[tuple[int, str]] = []
+    previous = ""
+    previous_at = -1
+    quote_lead_in = False
+    for line in transcript.splitlines():
+        m = _TURN.fullmatch(line)
+        if not m or not m["prefix"].strip() or not _IDENTITY.fullmatch(m["label"]):
+            window.clear()
+            previous = ""
+            continue
+        elapsed = 0
+        for part in m["prefix"].split(":"):
+            elapsed = elapsed * 60 + int(part)
+        label, sentence = m["label"], _normalize(m["text"])
+        contiguous = label == previous and 0 <= elapsed - previous_at <= 15
+        skip_continuation = contiguous and quote_lead_in
+        quote_lead_in = bool(re.search(
+            r"\b(?:dijo|dijeron|decia|said|told me|the message was)\s*[:,.]?\s*$", sentence
+        ))
+        if not contiguous:
+            window.clear()
+        previous, previous_at = label, elapsed
+        if (skip_continuation or elapsed > 90 or re.search(r"\bllamó\b", m["text"], re.I)
+                or _REPORTED.search(sentence) or _UNSAFE_INTRO.search(sentence)
+                or _NON_EMPLOYEE.search(sentence) or any(c in sentence for c in '?"¿“”«»')):
+            window.clear()
+            continue
+        window = [(at, text) for at, text in window[-2:] if elapsed - at <= 25]
+        window.append((elapsed, sentence))
+        speech = " ".join(re.sub(r"[^a-z0-9' ]+", " ", text) for _, text in window)
+        speech = " ".join(speech.split())
+        if (_CASE_HELP.search(speech) and (_OUTREACH.search(speech)
+                or (_OWNERSHIP.search(speech) and _OUR_FIRM.search(speech)))):
+            found.add(label)
+    # Echo or repeated introductions on different identities cannot establish
+    # which voice originated the speech. Leave other independent rules intact.
+    return found if len(found) == 1 else set()
 
 
 def _affiliated_staff_intro(text: str, names: set[str]) -> bool:
@@ -143,8 +223,9 @@ def resolve_phoneburner_roles(
 
     metadata, metadata_conflicts = _explicit_speaker_roles(event, set(texts))
     agent_names = _agent_names(event)
+    guided_intros = _guided_intros(transcript)
     for identity, turns in texts.items():
-        evidence: set[Role] = set()
+        evidence: set[Role] = {"Agent"} if identity in guided_intros else set()
         discovery: dict[str, set[int]] = {}
         for turn_index, text in enumerate(turns):
             # Remove quotations before examining identity evidence. Questions in
