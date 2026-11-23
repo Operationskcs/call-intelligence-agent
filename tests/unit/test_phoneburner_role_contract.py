@@ -48,6 +48,21 @@ def test_uncertain_word_alignment_never_attributes_quote(
     assert resolved.transcript == "00:02 [Unknown]: My car was hit. Please hold!"
 
 
+@pytest.mark.parametrize(("full_text", "words", "expected"), [
+    ("Le llamo de la firma. Yo no dije eso.", "le llamo de la firma", "Unknown"),
+    ("I was not driving.", "i was driving", "Unknown"),
+    ("Le llamo de la firma.", "le llamo de la firma", "Agent"),
+])
+def test_one_speaker_label_does_not_cover_missing_words(
+    full_text: str, words: str, expected: str, mock_call_event: CallEvent
+) -> None:
+    u = {"start": 2, "speaker": 0, "channel": 0, "transcript": full_text,
+         "words": [{"speaker": 0, "word": w} for w in words.split()]}
+    raw = _format_multichannel_transcript({"results": {"channels": [{}, {}], "utterances": [u]}})
+    result = resolve_phoneburner_roles(raw, mock_call_event, {"0": "Agent"})
+    assert result.transcript == f"00:02 [{expected}]: {full_text}"
+
+
 @pytest.mark.parametrize("quote", [
     "They are calling from the law firm.",
     "She said I was driving.",

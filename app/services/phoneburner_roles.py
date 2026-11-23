@@ -67,6 +67,27 @@ _PROFESSIONAL_INTRO = re.compile(
 )
 _NON_EMPLOYEE = re.compile(r"\b(?:client[ea]?|paciente|patient|customer|family member|"
                            r"spouse|espos[oa]|familiar)\b")
+_AFFILIATED_INTRO = re.compile(
+    r"\b(?:te|le|les) (?:habla|saluda) ([a-z]+(?: [a-z]+){0,3}?)"
+    r"(?:,)? del (?:equipo|departamento) (?:legal|juridico)\b"
+)
+_INDIRECT_INTRO = re.compile(
+    r"\b(?:no|nunca|cuando|segun|dice[n]?|dijo|dijeron|decia|mensaje|grabacion|ejemplo)\b"
+)
+
+
+def _affiliated_staff_intro(text: str, names: set[str]) -> bool:
+    """Require staff metadata, a direct self-introduction and an explicit affiliation."""
+    m = _AFFILIATED_INTRO.search(text)
+    if not m or _INDIRECT_INTRO.search(text) or _NON_EMPLOYEE.search(text):
+        return False
+    prefix = text[:m.start()].strip()
+    if prefix and not re.search(r"(?:[,!:;]|\b(?:mucho|con|un) gusto)[ ,!]*$", prefix):
+        return False
+    spoken = m[1].split()
+    return len(spoken[0]) >= 3 and any(
+        name.split()[:len(spoken)] == spoken for name in names
+    )
 _PERSONAL_EVENT = re.compile(
     r"\b(?:i (?:got|was) rear[ -]ended|(?:another driver|the other (?:driver|car)) "
     r"(?:hit|rear[ -]ended) (?:me|my car)|i was taken to (?:the |a )?hospital|"
@@ -143,7 +164,8 @@ def resolve_phoneburner_roles(
                     continue
                 if (_AGENT.search(clean) or (_PROFESSIONAL_INTRO.search(clean)
                                              and not _NON_EMPLOYEE.search(clean))
-                        or _named_introduction(clean, agent_names)):
+                        or _named_introduction(clean, agent_names)
+                        or _affiliated_staff_intro(clean, agent_names)):
                     evidence.add("Agent")
                 if _LEAD.search(clean) or _PERSONAL_EVENT.search(clean):
                     evidence.add("Lead")
