@@ -106,6 +106,15 @@ Eligible Intake calls must be connected, at least 30 seconds long, and include a
 
 ## Validation
 
+For PhoneBurner Intake, a new first-person Lead attribution must match audible
+words on the original, isolated recording track. Severe, directed misconduct
+also requires an independently recognized professional introduction and the
+same literal words on that track near the original timestamps. The second
+recognizer runs **offline** inside the worker/services; image builds verify
+the public model files by SHA-256. Ambiguity, overlapping voices, unavailable
+audio or a busy verifier cannot produce an automatic misconduct allegation.
+Neither historical recordings nor Call Quality decisions are rewritten.
+
 Before disabling Cloud Scheduler, validate:
 
 ```bash

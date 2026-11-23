@@ -15,6 +15,9 @@ COPY pyproject.toml PLAN.md ./
 COPY app ./app
 
 RUN uv pip install --system --no-cache .
+COPY tools/install_conduct_model.py /tmp/install_conduct_model.py
+RUN uv pip install --system --no-cache faster-whisper==1.2.1 ctranslate2==4.8.0 av==17.1.0 && python /tmp/install_conduct_model.py
+ENV HF_HUB_OFFLINE=1 HF_HUB_DISABLE_TELEMETRY=1
 
 USER app
 

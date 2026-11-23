@@ -34,7 +34,7 @@ async def upload_bytes(data: bytes, destination_uri: str, content_type: str) -> 
     return destination_uri
 
 
-async def download_bytes(uri: str) -> bytes:
+async def download_bytes(uri: str, *, max_bytes: int | None = None) -> bytes:
     """Download bytes from a GCS URI."""
 
     bucket_name, blob_name = _parse_gcs_uri(uri)
@@ -43,7 +43,13 @@ async def download_bytes(uri: str) -> bytes:
         from google.cloud import storage  # type: ignore[attr-defined]
 
         client = storage.Client()
-        return cast(bytes, client.bucket(bucket_name).blob(blob_name).download_as_bytes())
+        blob = client.bucket(bucket_name).blob(blob_name)
+        if max_bytes is not None:
+            blob.reload()
+            if blob.size is None or blob.size > max_bytes or blob.generation is None:
+                raise ValueError("Recording exceeds bounded audio verification limits")
+            return cast(bytes, blob.download_as_bytes(if_generation_match=blob.generation))
+        return cast(bytes, blob.download_as_bytes())
 
     return await asyncio.to_thread(_download)
 
