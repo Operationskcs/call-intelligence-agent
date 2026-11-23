@@ -14,6 +14,19 @@ def event():
                      raw_payload={}, gcs_audio_uri="gs://fixture/recording")
 
 
+def test_silence_echo_and_a_single_click_never_qualify_for_recognition():
+    np = pytest.importorskip("numpy")
+    audio = np.zeros((2, 16000), dtype=np.float32)
+    assert not offline._has_isolated_speech(audio, 0)
+    audio[0, :1600] = .2
+    assert not offline._has_isolated_speech(audio, 0)
+    audio[0, :3200] = .2
+    assert offline._has_isolated_speech(audio, 0)
+    assert not offline._has_isolated_speech(audio, 1)
+    audio[1] = audio[0]
+    assert not offline._has_isolated_speech(audio, 0)
+
+
 def dialogue(answer="I was stopped at a red light.", abuse="You are a fucking idiot."):
     return ("00:02 [Channel 1 Speaker 3]: I am calling from the law firm.\n"
             "00:05 [Channel 1 Speaker 3]: What happened?\n"

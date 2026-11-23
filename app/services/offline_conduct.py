@@ -30,6 +30,18 @@ def words(text: str) -> str:
     return " ".join(re.findall(r"[a-z0-9']+", _normalize(text).replace("’", "'")))
 
 
+def _has_isolated_speech(samples: Any, channel: int) -> bool:
+    """Silence and mirrored tracks cannot corroborate a speaker; skip ASR entirely."""
+    import numpy as np
+    # 100ms frames. A single noisy sample or one active click is not speech.
+    n = samples.shape[1] // 1600
+    if n < 2:
+        return False
+    powers = np.square(samples[:, :n*1600].reshape(2, n, 1600)).mean(axis=2)
+    valid = (powers[channel] > 1e-7) & (powers[channel] > 12 * powers[1-channel])
+    return bool(np.any(valid[1:] & valid[:-1]))
+
+
 def _listen(data: bytes, channel: int, at: int, phrase: str, exact: bool) -> bool:
     import av
     import numpy as np
@@ -59,7 +71,12 @@ def _listen(data: bytes, channel: int, at: int, phrase: str, exact: bool) -> boo
         if not chunks:
             return False
         samples = np.concatenate(chunks, axis=1)
+    if not _has_isolated_speech(samples, channel):
+        return False
+    # Twelve seconds of speech do not warrant repeated temperature fallback
+    # decoding on a Cloud Run CPU. Never relax the matching/evidence thresholds.
     segs, _ = _model().transcribe(np.ascontiguousarray(samples[channel]), beam_size=4,
+                                  temperature=0.0, max_new_tokens=64,
                                   condition_on_previous_text=False, word_timestamps=True)
     target = words(phrase).split()
     for seg in segs:
