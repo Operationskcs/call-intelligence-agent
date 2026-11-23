@@ -125,6 +125,8 @@ def _payload(
             if event.source is CallSource.PHONEBURNER and event.workspace == "intake"
             else {}
         ),
+        **({"conduct_audio": event._conduct_audio} if event._conduct_audio
+           and event.source is CallSource.PHONEBURNER and event.workspace == "intake" else {}),
         "transcript": transcript,
         "summary": note.summary,
         "disposition": note.disposition,

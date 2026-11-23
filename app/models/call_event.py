@@ -3,7 +3,7 @@
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, PrivateAttr
 
 
 class CallSource(str, Enum):
@@ -28,3 +28,5 @@ class CallEvent(BaseModel):
     agent_name: str | None = None
     gcs_audio_uri: str | None
     raw_payload: dict[str, Any]
+    # Internal only: never trust a webhook's purported audio verification.
+    _conduct_audio: str | None = PrivateAttr(default=None)

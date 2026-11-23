@@ -18,7 +18,7 @@ from app.models.call_event import CallEvent
 logger = logging.getLogger(__name__)
 Role = Literal["Agent", "Lead"]
 VERSION = "phoneburner-evidence-v2"
-POLICY_REVISION = "speaker-bound-case-offer-2026-11-23"
+POLICY_REVISION = "first-person-intake-dialogue-v3"
 _TURN = re.compile(
     r"^(?P<prefix>(?:\d+:\d{2}(?::\d{2})?\s+)?)"
     r"\[(?P<label>[^\]]+)]:\s*(?P<text>.*)$"
@@ -267,6 +267,96 @@ class RoleResolution:
     version: str = VERSION
 
 
+# A response is evidence only when its subject is the respondent. A bare
+# confirmation, greeting, date, injury adjective or contact name is not enough.
+_INTAKE_QUESTION = re.compile(
+    r"\b(?:what happened|how did (?:the|your) (?:accident|crash) happen|"
+    r"were you (?:driving|injured|hurt|involved)|did you (?:receive|seek|get) "
+    r"(?:any )?(?:medical|treatment)|que (?:te |le )?(?:paso|sucedio)|"
+    r"como (?:fue|ocurrio|paso) (?:el|tu|su) accidente|"
+    r"(?:tuviste|tuvo|sufriste|sufrio) (?:un |alguna? )?(?:accidente|lesion)|"
+    r"(?:recibiste|recibio) (?:atencion|tratamiento))\b"
+)
+_OWN_ANSWER = re.compile(
+    r"^(?:(?:si|yes|well|bueno|pues|mire|actually|so|yo)[, ]+)*"
+    r"(?:i (?:was (?:in|involved in) (?:a|an|the) (?:car |traffic )?(?:accident|crash)|"
+    r"had (?:a|an) (?:car |traffic )?(?:accident|crash)|was (?:rear[ -]ended|the driver)|"
+    r"went to (?:urgent care|the (?:emergency room|doctor|hospital))|"
+    r"was stopped at (?:a|the) (?:red light|intersection))|"
+    r"(?:tuve|sufri) un accidente|me accidente|me (?:pegaron|impactaron) por (?:detras|atras)|"
+    r"(?:iba|estaba) (?:conduciendo|manejando)|estaba (?:parad[oa]|detenid[oa]) en "
+    r"(?:el|un) semaforo|(?:fui|acudi) (?:a urgencias|al medico))\b"
+)
+_NONPERSONAL = re.compile(
+    r"\b(?:wrong number|someone else|not me|my (?:example|client|son|daughter|husband|wife)|"
+    r"no fui yo|no era yo|mi (?:cliente|espos[oa]|hij[oa])|hypothetical|imagine|"
+    r"pretend|repeating|repitiendo|repita|supongamos|imagine que)\b"
+)
+
+# The participant can identify themselves before the operator asks a scripted
+# question. Look for a collision involving the speaker personally, not just
+# references to a car, a relative's treatment, or another driver's fault.
+_VICTIM_ACCOUNT = re.compile(
+    r"\b(?:la (?:persona|senora|muchacha) que me (?:choco|atropello)|"
+    r"el (?:conductor|senor|muchacho) que me (?:choco|atropello)|"
+    r"(?:el otro (?:conductor|carro)|otro (?:carro|vehiculo)) "
+    r"(?:me (?:choco|impacto)|choco mi (?:carro|vehiculo))|"
+    r"(?:the (?:person|driver|lady|guy) (?:who|that) (?:hit|rear[ -]ended) me)|"
+    r"another (?:driver|vehicle) (?:hit|struck) my (?:vehicle|car))\b"
+)
+_OWN_DETAILS = re.compile(
+    r"\b(?:mi (?:carro|vehiculo|seguro|aseguradora|abogado)|yo (?:iba|estaba)|"
+    r"my (?:car|vehicle|insurance|lawyer|attorney)|i (?:went|had to|was driving))\b"
+)
+
+
+def _own_case_account(turns: list[str]) -> bool:
+    safe = []
+    for text in turns:
+        clean = _normalize(text)
+        if (_REPORTED.search(clean) or _NONPERSONAL.search(clean)
+                or re.search(r"\b(?:no|not|never|si (?:me|yo)|nunca)\b", clean)
+                or any(ch in clean for ch in '¿?"“”«»')):
+            safe.append("")
+        else:
+            safe.append(clean)
+    # Both statements must belong to this identity; no other speaker supplies
+    # evidence. Require distinct turns close in this speaker's own narrative.
+    for i, text in enumerate(safe):
+        if (_VICTIM_ACCOUNT.search(text) or _OWN_ANSWER.search(text)) and any(
+            _OWN_DETAILS.search(safe[j]) for j in range(max(0, i-3), min(len(safe), i+4))
+            if j != i
+        ):
+            return True
+    return False
+
+
+def _corroborated_answers(transcript: str, roles: dict[str, str]) -> set[str]:
+    if len(roles) != 2 or list(roles.values()).count("Agent") != 1:
+        return set()
+    found: set[str] = set()
+    prompt_at: int | None = None
+    for line in transcript.splitlines():
+        m = _TURN.fullmatch(line)
+        if not m or not m["prefix"].strip() or m["label"] not in roles:
+            prompt_at = None
+            continue
+        elapsed = 0
+        for part in m["prefix"].strip().split(":"):
+            elapsed = elapsed * 60 + int(part)
+        txt = _normalize(m["text"])
+        unsafe = (_REPORTED.search(txt) or _NONPERSONAL.search(txt)
+                  or any(ch in txt for ch in '"“”«»'))
+        if roles[m["label"]] == "Agent":
+            prompt_at = elapsed if not unsafe and "?" in txt and _INTAKE_QUESTION.search(txt) else None
+        else:
+            if (prompt_at is not None and 0 <= elapsed - prompt_at <= 30
+                    and not unsafe and "?" not in txt and _OWN_ANSWER.search(txt)):
+                found.add(m["label"])
+            prompt_at = None
+    return found
+
+
 def resolve_phoneburner_roles(
     transcript: str,
     event: CallEvent,
@@ -316,7 +406,10 @@ def resolve_phoneburner_roles(
                         or _named_introduction(clean, agent_names)
                         or _affiliated_staff_intro(clean, agent_names)):
                     evidence.add("Agent")
-                if _LEAD.search(clean) or _PERSONAL_EVENT.search(clean):
+                anchor = _LEAD.search(clean) or _PERSONAL_EVENT.search(clean)
+                if (anchor and not _NONPERSONAL.search(clean) and not re.search(
+                    r"\b(?:not|never|no|nunca)\b.{0,22}$", clean[:anchor.start()],
+                )):
                     evidence.add("Lead")
 
         # Require legal/intake context, two different topics and separate turns.
@@ -329,6 +422,9 @@ def resolve_phoneburner_roles(
         mapped = configured.get(channel[1]) if channel else None
         mixed_channel = bool(channel and len(channel_identities[channel[1]]) > 1)
         metadata_role = metadata.get(identity)
+        new_account = "Lead" not in evidence and _own_case_account(turns)
+        if new_account:
+            evidence.add("Lead")
         candidates = set(evidence)
         if mapped and not mixed_channel:
             candidates.add(mapped)
@@ -346,10 +442,16 @@ def resolve_phoneburner_roles(
                 if mapped
                 else "explicit_speaker_metadata"
                 if metadata_role
+                else "first_person_case_account"
+                if new_account
                 else "identity_evidence"
             )
         else:
             roles[identity], reasons[identity] = "Unknown", "insufficient_evidence"
+
+    for identity in _corroborated_answers(transcript, roles):
+        if reasons[identity] == "insufficient_evidence":
+            roles[identity], reasons[identity] = "Lead", "first_person_intake_response"
 
     # Two different acoustic identities claiming Agent may be transfers or a
     # diarization split. Do not turn either into Lead to force a two-party map.

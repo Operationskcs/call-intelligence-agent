@@ -1,11 +1,15 @@
 """Step 3: speech-to-text transcription."""
 
+import logging
+
 from app.adapters.stt.base import STTAdapter
 from app.adapters.stt.deepgram import DeepgramAdapter
 from app.adapters.stt.google_stt import GoogleSTTAdapter
 from app.adapters.stt.passthrough import PassthroughAdapter
 from app.config import get_settings
 from app.models.call_event import CallEvent, CallSource
+from app.services.conduct_audio import suspect
+from app.services.offline_conduct import verified_leads, verify
 from app.services.phoneburner_roles import resolve_phoneburner_roles
 from app.services.phoneburner_semantic import vertex_refine
 from app.services.speaker_role import resolve_speaker_roles
@@ -34,8 +38,23 @@ async def transcribe(event: CallEvent) -> str:
             event,
             settings.stt.phoneburner_channel_roles,
         )
-        if settings.stt.phoneburner_semantic_roles:
-            return await vertex_refine(raw_transcript, resolved, settings.gcp.project_id,
+        resolved = await verified_leads(raw_transcript, resolved, event.gcs_audio_uri)
+        lead_checks = [r for r in resolved.reasons.values() if r.startswith("first_person_audio_")]
+        if lead_checks:
+            logging.getLogger(__name__).info("lead_original_audio accepted=%d abstained=%d",
+                                             lead_checks.count("first_person_audio_confirmed"),
+                                             lead_checks.count("first_person_audio_inconclusive"))
+        final = resolved.transcript
+        if (settings.stt.phoneburner_semantic_roles
+                and "first_person_audio_inconclusive" not in resolved.reasons.values()):
+            final = await vertex_refine(raw_transcript, resolved, settings.gcp.project_id,
                                        settings.gcp.vertex_region)
-        return resolved.transcript
+        if suspect(final):
+            event._conduct_audio = "needs_review"
+            try:
+                event._conduct_audio = await verify(raw_transcript, final, event)
+            except Exception as exc:
+                logging.getLogger(__name__).warning("conduct_audio unavailable: %s",
+                                                    type(exc).__name__)
+        return final
     return resolve_speaker_roles(raw_transcript, event)
