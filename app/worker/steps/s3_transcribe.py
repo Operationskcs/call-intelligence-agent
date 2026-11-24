@@ -9,6 +9,7 @@ from app.adapters.stt.passthrough import PassthroughAdapter
 from app.config import get_settings
 from app.models.call_event import CallEvent, CallSource
 from app.services.conduct_audio import suspect, uncertain_windows
+from app.services.timed_conduct import Proposal
 from app.services.conduct_recovery import recover
 from app.services.offline_conduct import inspect_uncertainty, verified_leads, verify
 from app.services.phoneburner_roles import resolve_phoneburner_roles
@@ -81,5 +82,20 @@ async def transcribe(event: CallEvent) -> str:
                                                     type(exc).__name__)
             if corrected:
                 final, event._conduct_audio = corrected
+        proposal = getattr(adapter, "intake_proposal", None)
+        if (isinstance(proposal, Proposal) and scan in {"not_needed", "consistent"}
+                and not (event._conduct_audio or "").startswith("dual-asr-v1:")):
+            revised = proposal.render(raw_transcript, business=False)
+            expected = proposal.render(final, business=True)
+            if revised and expected and resolve_phoneburner_roles(revised, event).transcript == expected:
+                try:
+                    # A second listen must corroborate the intro and the whole
+                    # original sentence, including its framing and competing voice.
+                    proof = await verify(revised, expected, event, parent=proposal)
+                    if proof.startswith(f"dual-asr-v1:{proposal.index + proposal.clause}:"):
+                        final, event._conduct_audio = expected, proof
+                except Exception as exc:
+                    logging.getLogger(__name__).warning("timed_conduct unavailable: %s",
+                                                        type(exc).__name__)
         return final
     return resolve_speaker_roles(raw_transcript, event)

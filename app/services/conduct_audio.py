@@ -19,7 +19,8 @@ _DIRECT = re.compile(r"(?:you(?: are|'re) (?:a |an )?(?:fucking )?(?:idiot|bitch
                      r"(?:(?:put[oa]|maldit[oa]) )?(?:idiota|imbecil|perra|pendej[oa])|"
                      r"callate la puta boca|fuck you|"
                      r"(?:(?:tu )?eres|usted es) (?:un |una )?(?:hijueputa|hij[oa] de puta))")
-_CONTEXT = re.compile(r"\b(?:said|says|say|told|quote[ds]?|called me|repeat|for example|"
+_CONTEXT = re.compile(r"\b(?:said|says|say|told|quote[ds]?|quoting|(?:he|she|they) (?:was|were) like|"
+                      r"me dice[n]?|me sale con que|segun (?:el|ella)|called me|repeat|for example|"
                       r"what i heard|hypothetically|what if|pretend|suppose|would never|"
                       r"dij[oe]|dijeron|decia|me llamo|citando|por ejemplo|repite|diga|dime|"
                       r"supongamos|hipoteticamente|imaginese|transfer\w*|"
@@ -66,11 +67,45 @@ _NARRATING = re.compile(
 )
 
 
+_IMPERATIVE = re.compile(
+    r"go fuck yourself|(?:callate|callese)[ ,]+(?:hijueputa|idiota|imbecil|pendej[oa]|perra)"
+)
+# Only standalone intake statements can frame a newly recognized embedded clause.
+# Free text implying a hypothetical, a quotation or a third-party story never qualifies.
+_INTAKE_FRAME = re.compile(
+    r"(?:(?:i (?:am trying|need|want) to|i'm trying to) (?:help you|understand what happened|"
+    r"review your case|finish your intake)|please (?:listen to me|let me finish)|"
+    r"i (?:have your file here|need you to listen to me)|"
+    r"(?:(?:yo )?(?:estoy tratando de|necesito|quiero) "
+    r"(?:ayudar(?:le|te)|revisar su caso|entender lo que paso|terminar su registro))|"
+    r"(?:por favor )?(?:escucheme|dejeme terminar)|tengo su expediente aqui)"
+)
+_CONNECTOR = re.compile(r"(?:\s*[,;.!]+\s*|\s+)(?:but|and|pero|y)\s+|\s*[;.!]+\s*")
+
+
+def embedded_clause(text: str) -> str | None:
+    """Find one complete direct clause without discarding the meaning of its framing."""
+    clean = _normalize(text).strip(" .!,¡")
+    if any(c in clean for c in '?¿"“”«»()') or _CONTEXT.search(clean) or _NARRATING.search(clean):
+        return None
+    parts = _CONNECTOR.split(clean)
+    if len(parts) < 2:
+        return None
+    hits = [p for p in parts if _ADDRESSED.fullmatch(p) or _IMPERATIVE.fullmatch(p)]
+    if len(hits) != 1 or not all(p == hits[0] or _INTAKE_FRAME.fullmatch(p) for p in parts):
+        return None
+    return hits[0]
+
+
 def directed(text: str) -> bool:
     clean = _normalize(text)
     if (len(text) > 180 or any(c in clean for c in '?¿"“”«»()')
             or _CONTEXT.search(clean) or _NARRATING.search(clean)):
         return False
+    # A direct imperative, but also common as reported speech. Only a complete
+    # standalone turn may reach the existing speaker and acoustic checks.
+    if _IMPERATIVE.fullmatch(clean.strip(" .!,¡")) or embedded_clause(text):
+        return True
     if _ADDRESSED.fullmatch(clean.strip(" .!,¡")):
         return True
     # Allow other complete statements in the turn without treating arbitrary
