@@ -16,7 +16,7 @@ from app.services.phoneburner_roles import (
     RoleResolution, _LEAD, _normalize, _NONPERSONAL, _OWN_ANSWER, _PERSONAL_EVENT, _REPORTED,
     _TURN, _VICTIM_ACCOUNT,
 )
-from app.storage.gcs import download_bytes
+from app.storage.gcs import download_bytes as download_bytes
 
 _SLOT = threading.BoundedSemaphore(1)
 _SCAN_TIMEOUT_SECONDS = 60.0
@@ -82,10 +82,10 @@ def _wave(data: bytes, start: int, stop: int, *, allow_mono: bool = False) -> An
         return samples[:, :written]
 
 
-def _recognize(samples: Any) -> Any:
+def _recognize(samples: Any, language: str | None = None) -> Any:
     import numpy as np
     segs, _ = _model().transcribe(np.ascontiguousarray(samples), beam_size=4,
-                                  task="transcribe", temperature=0.0, max_new_tokens=64,
+                                  task="transcribe", language=language, temperature=0.0, max_new_tokens=64,
                                   condition_on_previous_text=False, word_timestamps=True)
     return list(segs)
 

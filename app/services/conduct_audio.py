@@ -12,12 +12,13 @@ from app.services.phoneburner_roles import (
     _AGENT, _PROFESSIONAL_INTRO, _TURN, _normalize, resolve_phoneburner_roles,
 )
 
-_CUE = re.compile(r"\b(?:puta|puto|perra|pendej[oa]|idiot[ae]?|imbecil|bitch|asshole|"
+_CUE = re.compile(r"\b(?:puta|puto|hijueputa|perra|pendej[oa]|idiot[ae]?|imbecil|bitch|asshole|"
                   r"motherfucker|fuck(?:ing)?|te voy a (?:matar|golpear)|i will hurt you)\b")
 _DIRECT = re.compile(r"(?:you(?: are|'re) (?:a |an )?(?:fucking )?(?:idiot|bitch|asshole)|"
                      r"shut (?:the fuck up|your fucking mouth)|(?:(?:tu )?eres|usted es) (?:un |una )?"
                      r"(?:(?:put[oa]|maldit[oa]) )?(?:idiota|imbecil|perra|pendej[oa])|"
-                     r"callate la puta boca)")
+                     r"callate la puta boca|fuck you|"
+                     r"(?:(?:tu )?eres|usted es) (?:un |una )?(?:hijueputa|hij[oa] de puta))")
 _CONTEXT = re.compile(r"\b(?:said|says|say|told|quote[ds]?|called me|repeat|for example|"
                       r"what i heard|hypothetically|what if|pretend|suppose|would never|"
                       r"dij[oe]|dijeron|decia|me llamo|citando|por ejemplo|repite|diga|dime|"

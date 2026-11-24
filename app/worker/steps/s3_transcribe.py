@@ -9,6 +9,7 @@ from app.adapters.stt.passthrough import PassthroughAdapter
 from app.config import get_settings
 from app.models.call_event import CallEvent, CallSource
 from app.services.conduct_audio import suspect, uncertain_windows
+from app.services.conduct_recovery import recover
 from app.services.offline_conduct import inspect_uncertainty, verified_leads, verify
 from app.services.phoneburner_roles import resolve_phoneburner_roles
 from app.services.phoneburner_semantic import vertex_refine
@@ -69,5 +70,16 @@ async def transcribe(event: CallEvent) -> str:
             except Exception as exc:
                 logging.getLogger(__name__).warning("conduct_audio unavailable: %s",
                                                     type(exc).__name__)
+        if (scan != "unavailable" and not (event._conduct_audio or "").startswith("dual-asr-v1:")
+                and (hints or event._conduct_audio)):
+            try:
+                corrected = await recover(raw_transcript, final, event, hints,
+                                          unresolved=scan == "needs_review")
+            except Exception as exc:
+                corrected = None
+                logging.getLogger(__name__).warning("conduct_recovery unavailable: %s",
+                                                    type(exc).__name__)
+            if corrected:
+                final, event._conduct_audio = corrected
         return final
     return resolve_speaker_roles(raw_transcript, event)
