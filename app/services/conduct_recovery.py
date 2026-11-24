@@ -189,21 +189,50 @@ def _second(track: Any, lang: str | None = None) -> list[Any]:
     return list(segs)
 
 
+def _whole_turn(
+    segs: list[Any], start: int, t: Target
+) -> tuple[str, list[tuple[float, float]]] | None:
+    """Select full segments by time, never by whether a substring sounds abusive."""
+    parts = []
+    for seg in segs:
+        if not seg.words:
+            if seg.text.strip() and seg.end + start > t.at - 0.15 and seg.start + start < t.until:
+                return None
+            continue
+        a, b = seg.words[0].start + start, seg.words[-1].end + start
+        if b <= t.at - 0.15 or a >= t.until:
+            continue
+        if a < t.at - 1.5 or b > t.until:
+            return None
+        parts.append(seg)
+    if not 1 <= len(parts) <= 4:
+        return None
+    for left, right in zip(parts, parts[1:]):
+        if not 0 <= right.words[0].start - left.words[-1].end <= 0.45 or re.search(
+            r"[.!?;:…]\s*$", left.text
+        ):
+            return None
+    text = " ".join(s.text.strip() for s in parts)
+    if not directed(text) or unsafe(text):
+        return None
+    bounds = audio._literal_bounds(parts, audio.words(text).split())
+    if not bounds or len(bounds) != sum(len(s.words) for s in parts):
+        return None
+    return text, bounds
+
+
 def _vote(segs: list[Any], samples: Any, start: int, t: Target) -> tuple[str, float, float] | None:
     import numpy as np
 
-    votes = []
-    for seg in segs:
-        text = seg.text.strip()
-        if not text or not directed(text) or unsafe(text):
-            continue
-        bounds = audio._literal_bounds(segs, audio.words(text).split())
-        if not bounds or abs(start + bounds[0][0] - t.at) > 1.5 or start + bounds[-1][1] > t.until:
-            continue
+    phrase = _whole_turn(segs, start, t)
+    if phrase:
+        text, bounds = phrase
+        if abs(start + bounds[0][0] - t.at) > 1.5:
+            return None
         if any(
             unsafe(s.text)
             for s in segs
-            if s.end >= bounds[0][0] - 3 and s.start <= bounds[-1][1] + 3
+            if s.end >= bounds[0][0] - 5 and s.start <= bounds[-1][1] + 4
         ):
             return None
         # Do not crop a qualifying/contradicting clause out of the same timed turn.
@@ -222,8 +251,42 @@ def _vote(segs: list[Any], samples: Any, start: int, t: Target) -> tuple[str, fl
             power = np.square(clip.astype(np.float64)).mean(axis=1)
             if not (power[t.channel] > 1e-7 and power[t.channel] > 12 * power[1 - t.channel]):
                 return None
-        votes.append((text, bounds[0][0], bounds[-1][1]))
-    return votes[0] if len(votes) == 1 else None
+        for (_, end), (begin, _) in zip(bounds, bounds[1:]):
+            # An interjection on the opposite track breaks a continuous statement.
+            gap = samples[:, int(end * 16000) : int(begin * 16000)]
+            n = gap.shape[1] // 320
+            if n:
+                levels = (
+                    np.square(gap[:, : n * 320].astype(np.float64)).reshape(2, n, 320).mean(axis=2)
+                )
+                if np.any(
+                    (levels[1 - t.channel] > 1e-7)
+                    & (levels[1 - t.channel] * 12 >= levels[t.channel])
+                ):
+                    return None
+        return text, bounds[0][0], bounds[-1][1]
+    return None
+
+
+def recognition_track(samples: Any, start: int, t: Target) -> Any:
+    """Lift quiet telephone speech for ASR only. Never change the evidence or its timing."""
+    import numpy as np
+
+    original = samples[t.channel]
+    core = samples[:, max(0, int((t.at - start) * 16000)) : int((t.until - start) * 16000)]
+    n = core.shape[1] // 1600
+    if n < 3:
+        return original
+    powers = np.square(core[:, : n * 1600].astype(np.float64)).reshape(2, n, 1600).mean(axis=2)
+    isolated = (powers[t.channel] > 1e-7) & (powers[t.channel] > 12 * powers[1 - t.channel])
+    if not np.any(isolated[2:] & isolated[1:-1] & isolated[:-2]):
+        return original
+    rms = float(np.sqrt(np.percentile(powers[t.channel, isolated], 75)))
+    if rms >= 0.035:
+        return original
+    peak = float(np.max(np.abs(original)))
+    gain = min(6.0, 0.055 / rms, 0.95 / max(peak, 1e-8))
+    return np.ascontiguousarray(original * np.float32(gain)) if gain > 1.1 else original
 
 
 def listen(data: bytes, t: Target, stop: threading.Event) -> str | None:
@@ -231,10 +294,11 @@ def listen(data: bytes, t: Target, stop: threading.Event) -> str | None:
     samples = audio._wave(data, start, t.until + 3)
     if samples is None or not audio._has_isolated_speech(samples, t.channel) or stop.is_set():
         return None
-    a = _vote(audio._recognize(samples[t.channel], t.lang), samples, start, t)
+    track = recognition_track(samples, start, t)
+    a = _vote(audio._recognize(track, t.lang), samples, start, t)
     if not a or stop.is_set():
         return None
-    b = _vote(_second(samples[t.channel], t.lang), samples, start, t)
+    b = _vote(_second(track, t.lang), samples, start, t)
     if (
         not b
         or audio.words(a[0]) != audio.words(b[0])

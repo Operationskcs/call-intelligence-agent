@@ -79,6 +79,89 @@ def test_nearby_or_truncated_disclaimer_does_not_count():
     assert not r._vote([seg(2, "He says:"), a], x, 10, t)
 
 
+def phrase_part(at, text):
+    out = spoken(text)
+    for w in out.words:
+        w.start += at - 4
+        w.end += at - 4
+    out.start = out.words[0].start
+    out.end = out.words[-1].end
+    return out
+
+
+@pytest.mark.parametrize("head,tail", [("You are", "an idiot."), ("Usted es", "un idiota.")])
+def test_two_models_can_segment_same_directed_phrase_differently(head, tail):
+    import numpy as np
+
+    x = np.zeros((2, 16 * 16000), dtype=np.float32)
+    x[1] = 0.008
+    t = r.Target(3, 14, 1, 21, head + " in " + tail)
+    with (
+        patch.object(r.audio, "_wave", return_value=x),
+        patch.object(
+            r.audio, "_recognize", return_value=[phrase_part(4, head), phrase_part(4.4, tail)]
+        ) as first,
+        patch.object(r, "_second", return_value=[phrase_part(4, head + " " + tail)]) as second,
+    ):
+        assert r.listen(b"audio", t, threading.Event()) == head + " " + tail
+    assert first.call_count == second.call_count == 1
+    assert first.call_args.args[0].max() > x[1].max()
+    assert float(x[1].max()) == pytest.approx(0.008)
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        "pause",
+        "punctuation",
+        "echo",
+        "interjection",
+        "low_confidence",
+        "attribution",
+        "denial",
+        "truncated",
+        "repeat",
+    ],
+)
+def test_no_splicing_or_removing_contradictory_evidence(failure):
+    import numpy as np
+
+    x = np.zeros((2, 16 * 16000), dtype=np.float32)
+    x[1] = 0.09
+    parts = [
+        phrase_part(4, "You are." if failure == "punctuation" else "You are"),
+        phrase_part(5.5 if failure == "pause" else 4.6, "an idiot."),
+    ]
+    if failure == "echo":
+        x[0, 4 * 16000 : 5 * 16000] = 0.09
+    if failure == "interjection":
+        x[0, int(4.38 * 16000) : int(4.56 * 16000)] = 0.09
+    if failure == "low_confidence":
+        parts[1].words[0].probability = 0.4
+    if failure == "attribution":
+        parts.insert(0, phrase_part(0.4, "He said:"))
+    if failure == "denial":
+        parts.insert(1, phrase_part(4.37, "not"))
+    if failure == "repeat":
+        parts.append(phrase_part(6, "You are an idiot."))
+    t = r.Target(3, 14, 1, 14.7 if failure == "truncated" else 21, "You are in idiot.")
+    assert not r._vote(parts, x, 10, t)
+
+
+def test_gain_does_not_amplify_noise_or_shared_audio_or_clip_loud_samples():
+    import numpy as np
+
+    t = r.Target(0, 4, 0, 9, "")
+    for level, other in [(0.0, 0.0), (0.001, 0.001), (0.1, 0.0)]:
+        x = np.zeros((2, 16 * 16000), dtype=np.float32)
+        x[0] = level
+        x[1] = other
+        assert np.array_equal(x[0], r.recognition_track(x, 0, t))
+    x[0] = 0.004
+    x[0, 1] = 1
+    assert np.array_equal(x[0], r.recognition_track(x, 0, t))
+
+
 @pytest.mark.parametrize("audible_intro", [True, False])
 async def test_recovery_binds_one_corrected_turn_to_exact_payload(audible_intro):
     raw = dialogue(abuse="You are in idiot.").replace("\n", "\r\n")
