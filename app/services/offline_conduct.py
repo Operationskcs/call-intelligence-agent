@@ -12,6 +12,7 @@ from typing import Any
 from app.models.call_event import CallEvent
 from app.adapters.stt.audio_hints import Hint
 from app.services.conduct_audio import _CONTEXT, _CUE, bind, probe_plan
+from app.services.timed_conduct import Proposal
 from app.services.phoneburner_roles import (
     RoleResolution, _LEAD, _normalize, _NONPERSONAL, _OWN_ANSWER, _PERSONAL_EVENT, _REPORTED,
     _TURN, _VICTIM_ACCOUNT,
@@ -310,7 +311,45 @@ def _listen(data: bytes, channel: int, at: int, phrase: str, exact: bool) -> boo
     return False
 
 
-async def verify(primary: str, final: str, event: CallEvent) -> str:
+def _context_listen(data: bytes, ch: int, p: Proposal) -> bool:
+    """Independently hear the entire parent (not a cutout or a primed transcript).
+
+    Punctuation can put a short direct clause inside one long audio segment.
+    Keep word-by-word acoustic proof and cross-talk veto on the clause itself.
+    """
+    import numpy as np
+    import math
+    start = max(0, p.pieces[0][0] - 2)
+    end = math.ceil(p.end) + 2
+    # One native Whisper context. Never trim the parent to make a fragment match.
+    if end - start > 30:
+        return False
+    x = _wave(data, start, end)
+    if x is None or x.shape[0] != 2 or not _has_isolated_speech(x,ch):
+        return False
+    other = _recognize(x[1-ch])
+    if any(_CUE.search(_normalize(seg.text)) for seg in other):
+        return False
+    segments = _recognize(x[ch])
+    parent = words(p.original).split()
+    bounds = _literal_bounds(segments,parent)
+    if not bounds or len(bounds) != len(parent) or abs(start+bounds[0][0]-p.pieces[0][0])>2:
+        return False
+    low = sum(len(words(text).split()) for _,text in p.pieces[:p.clause])
+    selected = bounds[low:low+len(words(p.pieces[p.clause][1]).split())]
+    if not selected or abs(start+selected[0][0]-p.hint.at)>2:
+        return False
+    for begin,finish in selected:
+        clip=x[:,int(begin*16000):int(finish*16000)]
+        if clip.shape[1]<160:
+            return False
+        power=np.square(clip.astype(np.float64)).mean(axis=1)
+        if not (power[ch]>1e-7 and power[ch]>12*power[1-ch]):
+            return False
+    return True
+
+
+async def verify(primary: str, final: str, event: CallEvent, *, parent: Proposal | None = None) -> str:
     plan = probe_plan(primary, final, event)
     if not plan or not event.gcs_audio_uri or not _SLOT.acquire(blocking=False):
         return "needs_review"
@@ -319,8 +358,15 @@ async def verify(primary: str, final: str, event: CallEvent) -> str:
         if len(data) > 32_000_000:
             return "needs_review"
         ch, intro_at, intro, at, phrase = plan
-        if (await asyncio.to_thread(_listen, data, ch, intro_at, intro, False)
-                and await asyncio.to_thread(_listen, data, ch, at, phrase, True)):
+        if not await asyncio.to_thread(_listen, data, ch, intro_at, intro, False):
+            return "needs_review"
+        if parent is not None:
+            if at != parent.hint.at or words(phrase) != words(parent.pieces[parent.clause][1]):
+                return "needs_review"
+            heard = await asyncio.to_thread(_context_listen,data,ch,parent)
+        else:
+            heard = await asyncio.to_thread(_listen,data,ch,at,phrase,True)
+        if heard:
             return bind(primary, final, event)
         return "needs_review"
     finally:
