@@ -29,6 +29,7 @@ def test_provider_signal_selection_without_profanity():
     "Mire, usted es un idiota, déjeme terminar.", "Listen. You are a fucking idiot. Let me finish.",
     "You are a fucking idiot.", "¡Oiga, cállate la puta boca!",
     "I have your file here. You are an idiot. We have two minutes left.",
+    "¡Cállese, idiota!", "Cállate, hijueputa.",
     "Tengo el expediente. Usted es un idiota. Ahora necesito la fecha.",
 ])
 def test_supported_full_turn_qualifies_for_audio_verification(text):
@@ -41,11 +42,32 @@ def test_supported_full_turn_qualifies_for_audio_verification(text):
     "El otro conductor me dijo: usted es un idiota.", "You are NOT a fucking idiot.",
     "Did she say you are a fucking idiot?", "Suppose you are a fucking idiot.",
     "Mire, «usted es un idiota», así me dijeron.", "The words were: you are a fucking idiot.",
+    "Cállate.", "La última perra hijueputa.", "Me dijo: cállate, hijueputa.",
+    "¿Cállese, idiota?", "Yo nunca diría cállate, imbécil.",
     "Let me read this aloud. You are an idiot.", "Voy a leer el mensaje. Usted es un idiota.",
 ])
 def test_reported_hypothetical_and_negated_are_not_misconduct(text):
     assert not directed(text)
     assert probe_plan(dialogue(abuse=text), resolve(dialogue(abuse=text)), event()) is None
+
+
+def test_standalone_imperative_can_be_checked_but_not_on_the_lead_track():
+    utterance = "Go fuck yourself!"
+    assert directed(utterance)
+    raw = dialogue(abuse=utterance)
+    assert probe_plan(raw, resolve(raw), event())[:2] == (1, 2)
+    other = dialogue(answer="I was stopped at a red light. " + utterance, abuse="Thank you.")
+    assert probe_plan(other, resolve(other), event()) is None
+    reported = raw.replace("I was stopped at a red light.", "I was stopped at a red light. He said:")
+    assert probe_plan(reported, resolve(reported), event()) is None
+
+
+@pytest.mark.parametrize("text", [
+    "He told me to go fuck yourself.", "Did he say go fuck yourself?",
+    "Don't go fuck yourself.", '"Go fuck yourself!"', "I heard this. Go fuck yourself.",
+    "If I say go fuck yourself, is that what you heard?", "Go fuck yourself?"])
+def test_imperative_embedded_in_a_longer_or_ambiguous_turn_never_qualifies(text):
+    assert not directed(text)
 
 
 def seg(t, text, confidence=.95):

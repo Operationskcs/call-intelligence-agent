@@ -71,6 +71,13 @@ def directed(text: str) -> bool:
     if (len(text) > 180 or any(c in clean for c in '?¿"“”«»()')
             or _CONTEXT.search(clean) or _NARRATING.search(clean)):
         return False
+    # A direct imperative, but also common as reported speech. Only a complete
+    # standalone turn may reach the existing speaker and acoustic checks.
+    if re.fullmatch(
+        r"go fuck yourself|(?:callate|callese)[ ,]+(?:hijueputa|idiota|imbecil|pendej[oa]|perra)",
+        clean.strip(" .!,¡"),
+    ):
+        return True
     if _ADDRESSED.fullmatch(clean.strip(" .!,¡")):
         return True
     # Allow other complete statements in the turn without treating arbitrary
